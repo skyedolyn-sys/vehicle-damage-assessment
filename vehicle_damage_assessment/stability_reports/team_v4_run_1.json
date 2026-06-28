@@ -1,0 +1,1542 @@
+{
+  "vehicle_info": {
+    "brand": "蔚来",
+    "model": "ES8",
+    "year": "2019"
+  },
+  "vehicle_prior": {
+    "vehicle": "2019 蔚来 ES8",
+    "vehicle_specs": {
+      "body_style": "suv",
+      "doors": 5,
+      "has_sunroof": true,
+      "has_roof_rack": false,
+      "headlight_layout": "split",
+      "rear_door_type": "tailgate",
+      "notes": "全尺寸纯电动7座SUV，采用X-Bar家族前脸设计，分体式LED大灯，封闭式前格栅，车顶为大面积全景天窗，隐藏式电动门把手，无框车门设计，车身侧面集成侧视摄像头"
+    },
+    "topology": {
+      "front": "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口",
+      "rear": "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰",
+      "left": "左侧四门布局（前门+后门+尾门），隐藏式门把手，前后翼子板肌肉感明显，腰线从前翼子板贯穿至尾灯，外后视镜位于前门三角窗下方",
+      "right": "右侧四门布局，与左侧对称，外后视镜同样位于前门三角窗下方",
+      "roof": "大面积全景天窗（不可开启），车顶后部设有鲨鱼鳍天线，无行李架，车顶线条平直以保证第三排头部空间"
+    },
+    "key_anchors": {
+      "front": [
+        "上部LED日行灯",
+        "下部主大灯",
+        "蔚来品牌logo",
+        "前保险杠进气口",
+        "前雷达/摄像头区域"
+      ],
+      "rear": [
+        "心电造型贯穿尾灯",
+        "NIO字母标识",
+        "尾门把手",
+        "后保险杠",
+        "后雨刮"
+      ],
+      "left": [
+        "左外后视镜",
+        "左前车门",
+        "左后车门",
+        "左前翼子板",
+        "左后翼子板",
+        "充电口（左后侧）"
+      ],
+      "right": [
+        "右外后视镜",
+        "右前车门",
+        "右后车门",
+        "右前翼子板",
+        "右后翼子板"
+      ],
+      "roof": [
+        "全景天窗",
+        "鲨鱼鳍天线",
+        "车顶行李架预留位"
+      ]
+    },
+    "common_photo_angles": [
+      "车头正前",
+      "车头左前45度",
+      "车头右前45度",
+      "车尾正后",
+      "车尾左后45度",
+      "车尾右后45度",
+      "左侧90度",
+      "右侧90度",
+      "车顶俯视"
+    ]
+  },
+  "topology": {
+    "vehicle_id": "unknown",
+    "vehicle_name": "Unknown Vehicle",
+    "nodes": {
+      "hood": {
+        "node_id": "hood",
+        "part_id": "hood",
+        "node_name": "引擎盖",
+        "node_type": "panel",
+        "region": "front",
+        "side": "center",
+        "adjacent_nodes": [
+          "grille_front",
+          "fender_front_left",
+          "fender_front_right",
+          "windshield_front"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right"
+        ]
+      },
+      "bumper_front": {
+        "node_id": "bumper_front",
+        "part_id": "bumper_front",
+        "node_name": "前保险杠",
+        "node_type": "panel",
+        "region": "front",
+        "side": "center",
+        "adjacent_nodes": [
+          "grille_front",
+          "fender_front_left",
+          "fender_front_right",
+          "headlight_front_left",
+          "headlight_front_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right"
+        ]
+      },
+      "headlight_front_left": {
+        "node_id": "headlight_front_left",
+        "part_id": "headlight_front_left",
+        "node_name": "左前大灯",
+        "node_type": "light",
+        "region": "front",
+        "side": "front_left",
+        "adjacent_nodes": [
+          "bumper_front",
+          "fender_front_left",
+          "grille_front"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "left"
+        ]
+      },
+      "headlight_front_right": {
+        "node_id": "headlight_front_right",
+        "part_id": "headlight_front_right",
+        "node_name": "右前大灯",
+        "node_type": "light",
+        "region": "front",
+        "side": "front_right",
+        "adjacent_nodes": [
+          "bumper_front",
+          "fender_front_right",
+          "grille_front"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_right",
+          "right"
+        ]
+      },
+      "grille_front": {
+        "node_id": "grille_front",
+        "part_id": "grille_front",
+        "node_name": "前格栅",
+        "node_type": "trim",
+        "region": "front",
+        "side": "center",
+        "adjacent_nodes": [
+          "hood",
+          "bumper_front",
+          "headlight_front_left",
+          "headlight_front_right",
+          "windshield_front"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right"
+        ]
+      },
+      "fender_front_left": {
+        "node_id": "fender_front_left",
+        "part_id": "fender_front_left",
+        "node_name": "左前翼子板",
+        "node_type": "panel",
+        "region": "front",
+        "side": "front_left",
+        "adjacent_nodes": [
+          "hood",
+          "bumper_front",
+          "headlight_front_left",
+          "door_front_left",
+          "mirror_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "left"
+        ]
+      },
+      "fender_front_right": {
+        "node_id": "fender_front_right",
+        "part_id": "fender_front_right",
+        "node_name": "右前翼子板",
+        "node_type": "panel",
+        "region": "front",
+        "side": "front_right",
+        "adjacent_nodes": [
+          "hood",
+          "bumper_front",
+          "headlight_front_right",
+          "door_front_right",
+          "mirror_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_right",
+          "right"
+        ]
+      },
+      "windshield_front": {
+        "node_id": "windshield_front",
+        "part_id": "windshield_front",
+        "node_name": "前挡风玻璃",
+        "node_type": "glass",
+        "region": "front",
+        "side": "center",
+        "adjacent_nodes": [
+          "hood",
+          "grille_front",
+          "roof_front"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "X-Bar家族化前脸设计，分体式大灯布局（上为细长LED日行灯/转向灯，下为远近光一体式主灯），封闭式前格栅，中央为蔚来品牌logo，前保险杠两侧设有通风口"
+        ],
+        "key_anchors": [
+          "上部LED日行灯",
+          "下部主大灯",
+          "蔚来品牌logo",
+          "前保险杠进气口",
+          "前雷达/摄像头区域"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right"
+        ]
+      },
+      "tailgate": {
+        "node_id": "tailgate",
+        "part_id": "tailgate",
+        "node_name": "尾门",
+        "node_type": "panel",
+        "region": "rear",
+        "side": "center",
+        "adjacent_nodes": [
+          "bumper_rear",
+          "windshield_rear",
+          "roof_rear"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰"
+        ],
+        "key_anchors": [
+          "心电造型贯穿尾灯",
+          "NIO字母标识",
+          "尾门把手",
+          "后保险杠",
+          "后雨刮"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_left",
+          "rear_right"
+        ]
+      },
+      "bumper_rear": {
+        "node_id": "bumper_rear",
+        "part_id": "bumper_rear",
+        "node_name": "后保险杠",
+        "node_type": "panel",
+        "region": "rear",
+        "side": "center",
+        "adjacent_nodes": [
+          "tailgate",
+          "taillight_rear_left",
+          "taillight_rear_right",
+          "fender_rear_left",
+          "fender_rear_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰"
+        ],
+        "key_anchors": [
+          "心电造型贯穿尾灯",
+          "NIO字母标识",
+          "尾门把手",
+          "后保险杠",
+          "后雨刮"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_left",
+          "rear_right"
+        ]
+      },
+      "taillight_rear_left": {
+        "node_id": "taillight_rear_left",
+        "part_id": "taillight_rear_left",
+        "node_name": "左后尾灯",
+        "node_type": "light",
+        "region": "rear",
+        "side": "rear_left",
+        "adjacent_nodes": [
+          "bumper_rear",
+          "tailgate",
+          "fender_rear_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰"
+        ],
+        "key_anchors": [
+          "心电造型贯穿尾灯",
+          "NIO字母标识",
+          "尾门把手",
+          "后保险杠",
+          "后雨刮"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_left",
+          "left"
+        ]
+      },
+      "taillight_rear_right": {
+        "node_id": "taillight_rear_right",
+        "part_id": "taillight_rear_right",
+        "node_name": "右后尾灯",
+        "node_type": "light",
+        "region": "rear",
+        "side": "rear_right",
+        "adjacent_nodes": [
+          "bumper_rear",
+          "tailgate",
+          "fender_rear_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰"
+        ],
+        "key_anchors": [
+          "心电造型贯穿尾灯",
+          "NIO字母标识",
+          "尾门把手",
+          "后保险杠",
+          "后雨刮"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_right",
+          "right"
+        ]
+      },
+      "windshield_rear": {
+        "node_id": "windshield_rear",
+        "part_id": "windshield_rear",
+        "node_name": "后挡风玻璃",
+        "node_type": "glass",
+        "region": "rear",
+        "side": "center",
+        "adjacent_nodes": [
+          "tailgate",
+          "roof_rear"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "标志性心电图（心跳曲线）造型贯穿式LED尾灯，夜间辨识度高，尾门中央有\"NIO\"字母标识，后保险杠下方有扩散器造型装饰"
+        ],
+        "key_anchors": [
+          "心电造型贯穿尾灯",
+          "NIO字母标识",
+          "尾门把手",
+          "后保险杠",
+          "后雨刮"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_left",
+          "rear_right"
+        ]
+      },
+      "door_front_left": {
+        "node_id": "door_front_left",
+        "part_id": "door_front_left",
+        "node_name": "左前门",
+        "node_type": "panel",
+        "region": "left",
+        "side": "front_left",
+        "adjacent_nodes": [
+          "fender_front_left",
+          "door_rear_left",
+          "mirror_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "左侧四门布局（前门+后门+尾门），隐藏式门把手，前后翼子板肌肉感明显，腰线从前翼子板贯穿至尾灯，外后视镜位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "左外后视镜",
+          "左前车门",
+          "左后车门",
+          "左前翼子板",
+          "左后翼子板",
+          "充电口（左后侧）"
+        ],
+        "visibility_from": [
+          "left",
+          "front_left",
+          "rear_left"
+        ]
+      },
+      "door_rear_left": {
+        "node_id": "door_rear_left",
+        "part_id": "door_rear_left",
+        "node_name": "左后门",
+        "node_type": "panel",
+        "region": "left",
+        "side": "rear_left",
+        "adjacent_nodes": [
+          "door_front_left",
+          "fender_rear_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "左侧四门布局（前门+后门+尾门），隐藏式门把手，前后翼子板肌肉感明显，腰线从前翼子板贯穿至尾灯，外后视镜位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "左外后视镜",
+          "左前车门",
+          "左后车门",
+          "左前翼子板",
+          "左后翼子板",
+          "充电口（左后侧）"
+        ],
+        "visibility_from": [
+          "left",
+          "front_left",
+          "rear_left"
+        ]
+      },
+      "mirror_left": {
+        "node_id": "mirror_left",
+        "part_id": "mirror_left",
+        "node_name": "左后视镜",
+        "node_type": "glass",
+        "region": "left",
+        "side": "front_left",
+        "adjacent_nodes": [
+          "fender_front_left",
+          "door_front_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "左侧四门布局（前门+后门+尾门），隐藏式门把手，前后翼子板肌肉感明显，腰线从前翼子板贯穿至尾灯，外后视镜位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "左外后视镜",
+          "左前车门",
+          "左后车门",
+          "左前翼子板",
+          "左后翼子板",
+          "充电口（左后侧）"
+        ],
+        "visibility_from": [
+          "left",
+          "front_left"
+        ]
+      },
+      "fender_rear_left": {
+        "node_id": "fender_rear_left",
+        "part_id": "fender_rear_left",
+        "node_name": "左后翼子板",
+        "node_type": "panel",
+        "region": "left",
+        "side": "rear_left",
+        "adjacent_nodes": [
+          "door_rear_left",
+          "bumper_rear",
+          "taillight_rear_left"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "左侧四门布局（前门+后门+尾门），隐藏式门把手，前后翼子板肌肉感明显，腰线从前翼子板贯穿至尾灯，外后视镜位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "左外后视镜",
+          "左前车门",
+          "左后车门",
+          "左前翼子板",
+          "左后翼子板",
+          "充电口（左后侧）"
+        ],
+        "visibility_from": [
+          "left",
+          "rear_left"
+        ]
+      },
+      "door_front_right": {
+        "node_id": "door_front_right",
+        "part_id": "door_front_right",
+        "node_name": "右前门",
+        "node_type": "panel",
+        "region": "right",
+        "side": "front_right",
+        "adjacent_nodes": [
+          "fender_front_right",
+          "door_rear_right",
+          "mirror_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "右侧四门布局，与左侧对称，外后视镜同样位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "右外后视镜",
+          "右前车门",
+          "右后车门",
+          "右前翼子板",
+          "右后翼子板"
+        ],
+        "visibility_from": [
+          "right",
+          "front_right",
+          "rear_right"
+        ]
+      },
+      "door_rear_right": {
+        "node_id": "door_rear_right",
+        "part_id": "door_rear_right",
+        "node_name": "右后门",
+        "node_type": "panel",
+        "region": "right",
+        "side": "rear_right",
+        "adjacent_nodes": [
+          "door_front_right",
+          "fender_rear_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "右侧四门布局，与左侧对称，外后视镜同样位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "右外后视镜",
+          "右前车门",
+          "右后车门",
+          "右前翼子板",
+          "右后翼子板"
+        ],
+        "visibility_from": [
+          "right",
+          "front_right",
+          "rear_right"
+        ]
+      },
+      "mirror_right": {
+        "node_id": "mirror_right",
+        "part_id": "mirror_right",
+        "node_name": "右后视镜",
+        "node_type": "glass",
+        "region": "right",
+        "side": "front_right",
+        "adjacent_nodes": [
+          "fender_front_right",
+          "door_front_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "右侧四门布局，与左侧对称，外后视镜同样位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "右外后视镜",
+          "右前车门",
+          "右后车门",
+          "右前翼子板",
+          "右后翼子板"
+        ],
+        "visibility_from": [
+          "right",
+          "front_right"
+        ]
+      },
+      "fender_rear_right": {
+        "node_id": "fender_rear_right",
+        "part_id": "fender_rear_right",
+        "node_name": "右后翼子板",
+        "node_type": "panel",
+        "region": "right",
+        "side": "rear_right",
+        "adjacent_nodes": [
+          "door_rear_right",
+          "bumper_rear",
+          "taillight_rear_right"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "右侧四门布局，与左侧对称，外后视镜同样位于前门三角窗下方"
+        ],
+        "key_anchors": [
+          "右外后视镜",
+          "右前车门",
+          "右后车门",
+          "右前翼子板",
+          "右后翼子板"
+        ],
+        "visibility_from": [
+          "right",
+          "rear_right"
+        ]
+      },
+      "roof_front": {
+        "node_id": "roof_front",
+        "part_id": "roof_front",
+        "node_name": "车顶前部",
+        "node_type": "structural",
+        "region": "roof",
+        "side": "center",
+        "adjacent_nodes": [
+          "windshield_front",
+          "roof_middle",
+          "sunroof_glass"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "大面积全景天窗（不可开启），车顶后部设有鲨鱼鳍天线，无行李架，车顶线条平直以保证第三排头部空间"
+        ],
+        "key_anchors": [
+          "全景天窗",
+          "鲨鱼鳍天线",
+          "车顶行李架预留位"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right"
+        ]
+      },
+      "roof_middle": {
+        "node_id": "roof_middle",
+        "part_id": "roof_middle",
+        "node_name": "车顶中部",
+        "node_type": "structural",
+        "region": "roof",
+        "side": "center",
+        "adjacent_nodes": [
+          "roof_front",
+          "roof_rear",
+          "sunroof_glass"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "大面积全景天窗（不可开启），车顶后部设有鲨鱼鳍天线，无行李架，车顶线条平直以保证第三排头部空间"
+        ],
+        "key_anchors": [
+          "全景天窗",
+          "鲨鱼鳍天线",
+          "车顶行李架预留位"
+        ],
+        "visibility_from": [
+          "left",
+          "right"
+        ]
+      },
+      "roof_rear": {
+        "node_id": "roof_rear",
+        "part_id": "roof_rear",
+        "node_name": "车顶后部",
+        "node_type": "structural",
+        "region": "roof",
+        "side": "center",
+        "adjacent_nodes": [
+          "roof_middle",
+          "windshield_rear",
+          "tailgate"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "大面积全景天窗（不可开启），车顶后部设有鲨鱼鳍天线，无行李架，车顶线条平直以保证第三排头部空间"
+        ],
+        "key_anchors": [
+          "全景天窗",
+          "鲨鱼鳍天线",
+          "车顶行李架预留位"
+        ],
+        "visibility_from": [
+          "rear",
+          "rear_left",
+          "rear_right"
+        ]
+      },
+      "sunroof_glass": {
+        "node_id": "sunroof_glass",
+        "part_id": "sunroof_glass",
+        "node_name": "天窗玻璃",
+        "node_type": "glass",
+        "region": "roof",
+        "side": "center",
+        "adjacent_nodes": [
+          "roof_front",
+          "roof_middle"
+        ],
+        "parent_node": null,
+        "child_nodes": [],
+        "standard_features": [
+          "大面积全景天窗（不可开启），车顶后部设有鲨鱼鳍天线，无行李架，车顶线条平直以保证第三排头部空间"
+        ],
+        "key_anchors": [
+          "全景天窗",
+          "鲨鱼鳍天线",
+          "车顶行李架预留位"
+        ],
+        "visibility_from": [
+          "front",
+          "front_left",
+          "front_right",
+          "left",
+          "right"
+        ]
+      }
+    },
+    "regions": {
+      "front": [
+        "hood",
+        "bumper_front",
+        "headlight_front_left",
+        "headlight_front_right",
+        "grille_front",
+        "fender_front_left",
+        "fender_front_right",
+        "windshield_front"
+      ],
+      "rear": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear"
+      ],
+      "left": [
+        "door_front_left",
+        "door_rear_left",
+        "mirror_left",
+        "fender_rear_left"
+      ],
+      "right": [
+        "door_front_right",
+        "door_rear_right",
+        "mirror_right",
+        "fender_rear_right"
+      ],
+      "roof": [
+        "roof_front",
+        "roof_middle",
+        "roof_rear",
+        "sunroof_glass"
+      ],
+      "roof_front": [
+        "roof_front",
+        "sunroof_glass"
+      ],
+      "roof_middle": [
+        "roof_middle",
+        "sunroof_glass"
+      ],
+      "roof_rear": [
+        "roof_rear"
+      ],
+      "roof_left": [
+        "roof_front",
+        "roof_middle",
+        "sunroof_glass"
+      ],
+      "roof_right": [
+        "roof_front",
+        "roof_middle",
+        "sunroof_glass"
+      ]
+    }
+  },
+  "plan": {
+    "photo_views": [
+      {
+        "photo_id": "167111-01.png",
+        "view_id": "auxiliary",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-02.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-03.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-04.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-05.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-06.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-07.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-08.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-09.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-10.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-11.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      },
+      {
+        "photo_id": "167111-12.png",
+        "view_id": "unknown",
+        "confidence": "low",
+        "reason": "planner 未返回该照片的视角"
+      }
+    ],
+    "view_groups": {
+      "front": [],
+      "front_left": [],
+      "front_right": [],
+      "rear": [],
+      "rear_left": [],
+      "rear_right": [],
+      "left": [],
+      "right": [],
+      "interior": [],
+      "auxiliary": [
+        {
+          "id": "167111-01.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-01.png",
+          "name": "167111-01.png"
+        }
+      ],
+      "unknown": [
+        {
+          "id": "167111-02.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-02.png",
+          "name": "167111-02.png"
+        },
+        {
+          "id": "167111-03.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-03.png",
+          "name": "167111-03.png"
+        },
+        {
+          "id": "167111-04.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-04.png",
+          "name": "167111-04.png"
+        },
+        {
+          "id": "167111-05.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-05.png",
+          "name": "167111-05.png"
+        },
+        {
+          "id": "167111-06.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-06.png",
+          "name": "167111-06.png"
+        },
+        {
+          "id": "167111-07.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-07.png",
+          "name": "167111-07.png"
+        },
+        {
+          "id": "167111-08.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-08.png",
+          "name": "167111-08.png"
+        },
+        {
+          "id": "167111-09.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-09.png",
+          "name": "167111-09.png"
+        },
+        {
+          "id": "167111-10.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-10.png",
+          "name": "167111-10.png"
+        },
+        {
+          "id": "167111-11.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-11.png",
+          "name": "167111-11.png"
+        },
+        {
+          "id": "167111-12.png",
+          "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-12.png",
+          "name": "167111-12.png"
+        }
+      ]
+    },
+    "coverage_gaps": [
+      {
+        "missing_view": "front",
+        "display_name": "车头正前",
+        "impacted_regions": [
+          "front",
+          "roof_front"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车头正前照片"
+      },
+      {
+        "missing_view": "front_left",
+        "display_name": "车头左侧",
+        "impacted_regions": [
+          "front",
+          "left",
+          "roof_front"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车头左侧照片"
+      },
+      {
+        "missing_view": "front_right",
+        "display_name": "车头右侧",
+        "impacted_regions": [
+          "front",
+          "right",
+          "roof_front"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车头右侧照片"
+      },
+      {
+        "missing_view": "left",
+        "display_name": "车辆左侧",
+        "impacted_regions": [
+          "left",
+          "roof_left"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车辆左侧照片"
+      },
+      {
+        "missing_view": "rear",
+        "display_name": "车尾正后",
+        "impacted_regions": [
+          "rear",
+          "roof_rear"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车尾正后照片"
+      },
+      {
+        "missing_view": "rear_left",
+        "display_name": "车尾左侧",
+        "impacted_regions": [
+          "rear",
+          "left",
+          "roof_rear"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车尾左侧照片"
+      },
+      {
+        "missing_view": "rear_right",
+        "display_name": "车尾右侧",
+        "impacted_regions": [
+          "rear",
+          "right",
+          "roof_rear"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车尾右侧照片"
+      },
+      {
+        "missing_view": "right",
+        "display_name": "车辆右侧",
+        "impacted_regions": [
+          "right",
+          "roof_right"
+        ],
+        "impacted_parts": [],
+        "suggested_action": "补拍车辆右侧照片"
+      }
+    ],
+    "workflow_plan": {
+      "summary": "已覆盖外观视角：无",
+      "priority_views": [],
+      "missing_critical_views": [
+        "front",
+        "front_left",
+        "front_right",
+        "left",
+        "rear",
+        "rear_left",
+        "rear_right",
+        "right"
+      ]
+    },
+    "photo_types": {
+      "167111-01.png": "auxiliary",
+      "167111-02.png": "exterior",
+      "167111-03.png": "exterior",
+      "167111-04.png": "exterior",
+      "167111-05.png": "exterior",
+      "167111-06.png": "exterior"
+    }
+  },
+  "subagent_results": [],
+  "review": {
+    "reviewed_parts": [],
+    "reviewed_part_actual_states": [],
+    "added_uncertain_items": [],
+    "needs_rephotography": [],
+    "summary": ""
+  },
+  "excluded_photos": [
+    {
+      "id": "167111-02.png",
+      "name": "167111-02.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-03.png",
+      "name": "167111-03.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-04.png",
+      "name": "167111-04.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-05.png",
+      "name": "167111-05.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-06.png",
+      "name": "167111-06.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-07.png",
+      "name": "167111-07.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-08.png",
+      "name": "167111-08.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-09.png",
+      "name": "167111-09.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-10.png",
+      "name": "167111-10.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-11.png",
+      "name": "167111-11.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-12.png",
+      "name": "167111-12.png",
+      "reason": "unknown"
+    },
+    {
+      "id": "167111-01.png",
+      "name": "167111-01.png",
+      "reason": "auxiliary"
+    }
+  ],
+  "parts": [
+    {
+      "part_id": "hood",
+      "part_name": "引擎盖",
+      "part_category": "front",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "bumper_front",
+      "part_name": "前保险杠",
+      "part_category": "front",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "headlight_front_left",
+      "part_name": "左前大灯",
+      "part_category": "front",
+      "side": "front_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "headlight_front_right",
+      "part_name": "右前大灯",
+      "part_category": "front",
+      "side": "front_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "grille_front",
+      "part_name": "前格栅",
+      "part_category": "front",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "fender_front_left",
+      "part_name": "左前翼子板",
+      "part_category": "front",
+      "side": "front_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "fender_front_right",
+      "part_name": "右前翼子板",
+      "part_category": "front",
+      "side": "front_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "windshield_front",
+      "part_name": "前挡风玻璃",
+      "part_category": "front",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "tailgate",
+      "part_name": "尾门",
+      "part_category": "rear",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "bumper_rear",
+      "part_name": "后保险杠",
+      "part_category": "rear",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "taillight_rear_left",
+      "part_name": "左后尾灯",
+      "part_category": "rear",
+      "side": "rear_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "taillight_rear_right",
+      "part_name": "右后尾灯",
+      "part_category": "rear",
+      "side": "rear_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "windshield_rear",
+      "part_name": "后挡风玻璃",
+      "part_category": "rear",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "door_front_left",
+      "part_name": "左前门",
+      "part_category": "left",
+      "side": "front_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "door_rear_left",
+      "part_name": "左后门",
+      "part_category": "left",
+      "side": "rear_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "mirror_left",
+      "part_name": "左后视镜",
+      "part_category": "left",
+      "side": "front_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "fender_rear_left",
+      "part_name": "左后翼子板",
+      "part_category": "left",
+      "side": "rear_left",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "door_front_right",
+      "part_name": "右前门",
+      "part_category": "right",
+      "side": "front_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "door_rear_right",
+      "part_name": "右后门",
+      "part_category": "right",
+      "side": "rear_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "mirror_right",
+      "part_name": "右后视镜",
+      "part_category": "right",
+      "side": "front_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "fender_rear_right",
+      "part_name": "右后翼子板",
+      "part_category": "right",
+      "side": "rear_right",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "roof_front",
+      "part_name": "车顶前部",
+      "part_category": "roof",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "roof_middle",
+      "part_name": "车顶中部",
+      "part_category": "roof",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "roof_rear",
+      "part_name": "车顶后部",
+      "part_category": "roof",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "sunroof_glass",
+      "part_name": "天窗玻璃",
+      "part_category": "roof",
+      "side": "center",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "damage_type": [],
+      "confidence": "low",
+      "evidence_photo": [],
+      "evidence_sources": [],
+      "notes": "该区域无照片覆盖，无法判断"
+    }
+  ],
+  "uncertain_items": []
+}

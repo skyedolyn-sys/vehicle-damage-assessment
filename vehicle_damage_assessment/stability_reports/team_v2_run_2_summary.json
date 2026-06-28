@@ -1,0 +1,231 @@
+{
+  "run": 2,
+  "elapsed": 236.6889133453369,
+  "photo_count": 12,
+  "covered_views": [
+    "front",
+    "front_left_45",
+    "rear_left_45",
+    "rear_right_45"
+  ],
+  "covered_view_count": 4,
+  "subagent_count": 4,
+  "total_parts": 25,
+  "uncertain_count": 6,
+  "uncertain_part_ids": [
+    "taillight_rear_right",
+    "mirror_right",
+    "roof_front",
+    "roof_middle",
+    "roof_rear",
+    "sunroof_glass"
+  ],
+  "status_counts": {
+    "intact": 15,
+    "missing": 3,
+    "damaged": 1,
+    "uncertain": 6
+  },
+  "parts": [
+    {
+      "part_id": "hood",
+      "part_name": "引擎盖",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "引擎盖表面光滑平整，可见NIO车标，无明显划痕、凹陷或变形，反光为正常光影"
+    },
+    {
+      "part_id": "bumper_front",
+      "part_name": "前保险杠",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "前保险杠完整可见，配有毫米波雷达和车牌架区域，表面无明显损伤"
+    },
+    {
+      "part_id": "headlight_front_left",
+      "part_name": "左前大灯",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "左前大灯灯罩透明，灯组完整，无裂纹或破损"
+    },
+    {
+      "part_id": "headlight_front_right",
+      "part_name": "右前大灯",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "右前大灯灯罩透明，灯组完整，无裂纹或破损"
+    },
+    {
+      "part_id": "grille_front",
+      "part_name": "前格栅",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "前格栅（含下部进气口）完整可见，造型完整无变形"
+    },
+    {
+      "part_id": "fender_front_left",
+      "part_name": "左前翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "左前翼子板大部分可见，板面平整无明显划痕凹陷"
+    },
+    {
+      "part_id": "fender_front_right",
+      "part_name": "右前翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "右前翼子板大部分可见，板面平整无明显划痕凹陷"
+    },
+    {
+      "part_id": "windshield_front",
+      "part_name": "前挡风玻璃",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "前挡风玻璃透明完整，无裂纹或破损，可见雨量传感器等组件"
+    },
+    {
+      "part_id": "tailgate",
+      "part_name": "尾门",
+      "status": "missing",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "尾门整体缺失，可直接看到车厢内部及顶盖框架，铰链处无门体；尾门严重撕裂变形，大面积钣金缺失，可见内部骨架结构，存在大面积破口"
+    },
+    {
+      "part_id": "bumper_rear",
+      "part_name": "后保险杠",
+      "status": "missing",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "后保险杠已完全脱落，散落在车辆后方地面上，车尾后部暴露出车身结构件；后保险杠严重破损，结构断裂，部分部件脱落悬挂在外"
+    },
+    {
+      "part_id": "taillight_rear_left",
+      "part_name": "左后尾灯",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "low",
+      "notes": "左后尾灯灯罩可见破裂，周边车身结构严重变形扭曲，灯组安装位置已错位；完全不可见，被车体左侧遮挡，无法判断"
+    },
+    {
+      "part_id": "taillight_rear_right",
+      "part_name": "右后尾灯",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "右后尾灯位于远端，角度遮挡严重，仅可见局部轮廓，整体状态无法完整判断；局部可见，被尾门及保险杠严重损毁区域遮挡，无法完整判断灯组状态"
+    },
+    {
+      "part_id": "windshield_rear",
+      "part_name": "后挡风玻璃",
+      "status": "missing",
+      "damage_level": "severe",
+      "confidence": "low",
+      "notes": "后挡风玻璃完全缺失，玻璃框架区域敞开，可直视车厢内部顶棚；完全不可见，被严重变形的尾门遮挡，无法判断玻璃完整性"
+    },
+    {
+      "part_id": "door_front_left",
+      "part_name": "左前门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "左前门可见，门板表面无明显划痕、凹陷或变形，车门轮廓完整"
+    },
+    {
+      "part_id": "door_rear_left",
+      "part_name": "左后门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "左后门可见，门板及车窗玻璃区域无明显损伤，门把手及腰线完整"
+    },
+    {
+      "part_id": "mirror_left",
+      "part_name": "左后视镜",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "左后视镜外壳及镜面可见，未见明显破损或缺失"
+    },
+    {
+      "part_id": "fender_rear_left",
+      "part_name": "左后翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "左后翼子板（前段靠近左后门区域）可见，漆面及钣金无明显异常；后段与尾灯交接处因尾部整体损毁而难以单独评估"
+    },
+    {
+      "part_id": "door_front_right",
+      "part_name": "右前门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "远端可见，门板轮廓正常，无明显变形或划痕"
+    },
+    {
+      "part_id": "door_rear_right",
+      "part_name": "右后门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "门板完整，门把手正常，无明显变形、划痕或凹陷"
+    },
+    {
+      "part_id": "mirror_right",
+      "part_name": "右后视镜",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "完全不可见，超出本视角覆盖范围，无法判断"
+    },
+    {
+      "part_id": "fender_rear_right",
+      "part_name": "右后翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "翼子板钣金面完整，轮拱线条流畅，无明显变形或划痕；表面有部分水渍/反光不属于损伤"
+    },
+    {
+      "part_id": "roof_front",
+      "part_name": "车顶前部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "该部件所在区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "roof_middle",
+      "part_name": "车顶中部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "该部件所在区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "roof_rear",
+      "part_name": "车顶后部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "该部件所在区域无照片覆盖，无法判断"
+    },
+    {
+      "part_id": "sunroof_glass",
+      "part_name": "天窗玻璃",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low",
+      "notes": "该部件所在区域无照片覆盖，无法判断"
+    }
+  ]
+}

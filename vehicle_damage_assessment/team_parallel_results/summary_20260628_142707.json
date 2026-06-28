@@ -1,0 +1,370 @@
+{
+  "timestamp": "20260628_142707",
+  "leads": [
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 265.74,
+      "overall_severity": "severe",
+      "structural_damage_flag": true,
+      "damaged_count": 9,
+      "missing_count": 0,
+      "uncertain_count": 1,
+      "intact_count": 15,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "windshield_rear",
+        "door_front_left",
+        "door_rear_left",
+        "fender_rear_left",
+        "fender_rear_right",
+        "sunroof_glass"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_left"
+      ],
+      "subagent_views": [
+        "rear_right",
+        "front_left",
+        "front_right",
+        "right",
+        "rear_left",
+        "left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 352.95,
+      "overall_severity": "severe",
+      "structural_damage_flag": true,
+      "damaged_count": 12,
+      "missing_count": 0,
+      "uncertain_count": 1,
+      "intact_count": 12,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear",
+        "fender_rear_left",
+        "door_front_right",
+        "door_rear_right",
+        "fender_rear_right",
+        "roof_middle",
+        "roof_rear",
+        "sunroof_glass"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_right"
+      ],
+      "subagent_views": [
+        "rear_right",
+        "left",
+        "front_right",
+        "rear_left",
+        "front_left",
+        "right"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 238.64,
+      "overall_severity": "severe",
+      "structural_damage_flag": true,
+      "damaged_count": 9,
+      "missing_count": 0,
+      "uncertain_count": 1,
+      "intact_count": 15,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_right",
+        "windshield_rear",
+        "fender_rear_left",
+        "fender_rear_right",
+        "roof_middle",
+        "roof_rear",
+        "sunroof_glass"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_left"
+      ],
+      "subagent_views": [
+        "rear_right",
+        "front_left",
+        "front_right",
+        "right",
+        "rear_left",
+        "left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 256.89,
+      "overall_severity": "severe",
+      "structural_damage_flag": true,
+      "damaged_count": 11,
+      "missing_count": 0,
+      "uncertain_count": 1,
+      "intact_count": 13,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear",
+        "door_rear_left",
+        "fender_rear_left",
+        "fender_rear_right",
+        "roof_middle",
+        "roof_rear",
+        "sunroof_glass"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_left"
+      ],
+      "subagent_views": [
+        "rear_right",
+        "left",
+        "front_right",
+        "right",
+        "rear_left",
+        "front_left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 283.69,
+      "overall_severity": "moderate",
+      "structural_damage_flag": true,
+      "damaged_count": 8,
+      "missing_count": 0,
+      "uncertain_count": 2,
+      "intact_count": 15,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear",
+        "fender_rear_left",
+        "door_rear_right",
+        "fender_rear_right"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_left",
+        "mirror_right"
+      ],
+      "subagent_views": [
+        "rear_right",
+        "front_left",
+        "front_right",
+        "right",
+        "rear_left",
+        "left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    }
+  ]
+}

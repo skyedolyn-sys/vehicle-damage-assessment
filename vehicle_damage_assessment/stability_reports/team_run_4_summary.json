@@ -1,0 +1,208 @@
+{
+  "run": 4,
+  "elapsed": 170.295725107193,
+  "photo_count": 12,
+  "covered_views": [
+    "front",
+    "front_right_45",
+    "rear_left_45",
+    "rear_right_45"
+  ],
+  "covered_view_count": 4,
+  "subagent_count": 4,
+  "total_parts": 25,
+  "uncertain_count": 9,
+  "uncertain_part_ids": [
+    "headlight_front_left",
+    "fender_front_left",
+    "door_front_left",
+    "mirror_left",
+    "door_front_right",
+    "roof_front",
+    "roof_middle",
+    "roof_rear",
+    "sunroof_glass"
+  ],
+  "status_counts": {
+    "intact": 7,
+    "uncertain": 9,
+    "damaged": 9
+  },
+  "parts": [
+    {
+      "part_id": "hood",
+      "part_name": "引擎盖",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "bumper_front",
+      "part_name": "前保险杠",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "headlight_front_left",
+      "part_name": "左前大灯",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "headlight_front_right",
+      "part_name": "右前大灯",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "grille_front",
+      "part_name": "前格栅",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "fender_front_left",
+      "part_name": "左前翼子板",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "fender_front_right",
+      "part_name": "右前翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "windshield_front",
+      "part_name": "前挡风玻璃",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "tailgate",
+      "part_name": "尾门",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "bumper_rear",
+      "part_name": "后保险杠",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "taillight_rear_left",
+      "part_name": "左后尾灯",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "taillight_rear_right",
+      "part_name": "右后尾灯",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "windshield_rear",
+      "part_name": "后挡风玻璃",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "door_front_left",
+      "part_name": "左前门",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "door_rear_left",
+      "part_name": "左后门",
+      "status": "damaged",
+      "damage_level": "light",
+      "confidence": "medium"
+    },
+    {
+      "part_id": "mirror_left",
+      "part_name": "左后视镜",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "fender_rear_left",
+      "part_name": "左后翼子板",
+      "status": "damaged",
+      "damage_level": "moderate",
+      "confidence": "high"
+    },
+    {
+      "part_id": "door_front_right",
+      "part_name": "右前门",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "door_rear_right",
+      "part_name": "右后门",
+      "status": "damaged",
+      "damage_level": "light",
+      "confidence": "medium"
+    },
+    {
+      "part_id": "mirror_right",
+      "part_name": "右后视镜",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high"
+    },
+    {
+      "part_id": "fender_rear_right",
+      "part_name": "右后翼子板",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high"
+    },
+    {
+      "part_id": "roof_front",
+      "part_name": "车顶前部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "roof_middle",
+      "part_name": "车顶中部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "roof_rear",
+      "part_name": "车顶后部",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    },
+    {
+      "part_id": "sunroof_glass",
+      "part_name": "天窗玻璃",
+      "status": "uncertain",
+      "damage_level": "unknown",
+      "confidence": "low"
+    }
+  ]
+}

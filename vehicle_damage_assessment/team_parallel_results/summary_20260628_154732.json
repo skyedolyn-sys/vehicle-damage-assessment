@@ -1,0 +1,590 @@
+{
+  "timestamp": "20260628_154732",
+  "leads": [
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 264.43,
+      "overall_severity": "moderate",
+      "structural_damage_flag": true,
+      "damaged_count": 6,
+      "missing_count": 0,
+      "uncertain_count": 6,
+      "intact_count": 13,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_right",
+        "windshield_rear",
+        "fender_rear_left",
+        "fender_rear_right"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "headlight_front_right",
+        "fender_front_right",
+        "taillight_rear_left",
+        "door_front_right",
+        "mirror_right",
+        "roof_rear"
+      ],
+      "subagent_views": [
+        "front_left",
+        "rear_right",
+        "right",
+        "left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear",
+          "rear_left"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前格栅",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯"
+            ],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "尾门",
+              "后备箱盖",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃"
+            ],
+            "suggested_action": "补拍车尾正后照片"
+          },
+          {
+            "missing_view": "rear_left",
+            "display_name": "车尾左侧",
+            "impacted_regions": [
+              "rear",
+              "left",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "后备箱盖",
+              "尾门",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃",
+              "左前门",
+              "左后门",
+              "左后视镜",
+              "左后翼子板"
+            ],
+            "suggested_action": "补拍车尾左侧照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 629.3,
+      "overall_severity": "moderate",
+      "structural_damage_flag": true,
+      "damaged_count": 8,
+      "missing_count": 0,
+      "uncertain_count": 2,
+      "intact_count": 15,
+      "damaged_parts": [
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear",
+        "fender_rear_left",
+        "door_rear_right",
+        "fender_rear_right"
+      ],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "mirror_right",
+        "roof_rear"
+      ],
+      "subagent_views": [
+        "front_left",
+        "rear_right",
+        "right",
+        "left",
+        "rear_left",
+        "front"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front",
+          "front_left",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front_right",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front_right",
+            "display_name": "车头右侧",
+            "impacted_regions": [
+              "front",
+              "right",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯",
+              "前格栅",
+              "左前翼子板",
+              "右前翼子板",
+              "前挡风玻璃",
+              "右前门",
+              "右后门",
+              "右后视镜",
+              "右后翼子板"
+            ],
+            "suggested_action": "补拍车头右侧照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "尾门",
+              "后备箱盖",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃"
+            ],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 297.44,
+      "overall_severity": "none",
+      "structural_damage_flag": false,
+      "damaged_count": 0,
+      "missing_count": 0,
+      "uncertain_count": 25,
+      "intact_count": 0,
+      "damaged_parts": [],
+      "missing_parts": [],
+      "uncertain_parts": [
+        "hood",
+        "bumper_front",
+        "headlight_front_left",
+        "headlight_front_right",
+        "grille_front",
+        "fender_front_left",
+        "fender_front_right",
+        "windshield_front",
+        "tailgate",
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "windshield_rear",
+        "door_front_left",
+        "door_rear_left",
+        "mirror_left",
+        "fender_rear_left",
+        "door_front_right",
+        "door_rear_right",
+        "mirror_right",
+        "fender_rear_right",
+        "roof_front",
+        "roof_middle",
+        "roof_rear",
+        "sunroof_glass"
+      ],
+      "subagent_views": [],
+      "coverage_summary": {
+        "covered_views": [],
+        "missing_critical_views": [
+          "front",
+          "front_left",
+          "front_right",
+          "left",
+          "rear",
+          "rear_left",
+          "rear_right",
+          "right"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前格栅",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯"
+            ],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "front_left",
+            "display_name": "车头左侧",
+            "impacted_regions": [
+              "front",
+              "left",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯",
+              "前格栅",
+              "左前翼子板",
+              "右前翼子板",
+              "前挡风玻璃",
+              "左前门",
+              "左后门",
+              "左后视镜",
+              "左后翼子板"
+            ],
+            "suggested_action": "补拍车头左侧照片"
+          },
+          {
+            "missing_view": "front_right",
+            "display_name": "车头右侧",
+            "impacted_regions": [
+              "front",
+              "right",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯",
+              "前格栅",
+              "左前翼子板",
+              "右前翼子板",
+              "前挡风玻璃",
+              "右前门",
+              "右后门",
+              "右后视镜",
+              "右后翼子板"
+            ],
+            "suggested_action": "补拍车头右侧照片"
+          },
+          {
+            "missing_view": "left",
+            "display_name": "车辆左侧",
+            "impacted_regions": [
+              "left",
+              "roof_left"
+            ],
+            "impacted_parts": [
+              "左前门",
+              "左后门",
+              "左后视镜",
+              "左后翼子板"
+            ],
+            "suggested_action": "补拍车辆左侧照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "尾门",
+              "后备箱盖",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃"
+            ],
+            "suggested_action": "补拍车尾正后照片"
+          },
+          {
+            "missing_view": "rear_left",
+            "display_name": "车尾左侧",
+            "impacted_regions": [
+              "rear",
+              "left",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "后备箱盖",
+              "尾门",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃",
+              "左前门",
+              "左后门",
+              "左后视镜",
+              "左后翼子板"
+            ],
+            "suggested_action": "补拍车尾左侧照片"
+          },
+          {
+            "missing_view": "rear_right",
+            "display_name": "车尾右侧",
+            "impacted_regions": [
+              "rear",
+              "right",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "后备箱盖",
+              "尾门",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃",
+              "右前门",
+              "右后门",
+              "右后视镜",
+              "右后翼子板"
+            ],
+            "suggested_action": "补拍车尾右侧照片"
+          },
+          {
+            "missing_view": "right",
+            "display_name": "车辆右侧",
+            "impacted_regions": [
+              "right",
+              "roof_right"
+            ],
+            "impacted_parts": [
+              "右前门",
+              "右后门",
+              "右后视镜",
+              "右后翼子板"
+            ],
+            "suggested_action": "补拍车辆右侧照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 274.78,
+      "overall_severity": "moderate",
+      "structural_damage_flag": true,
+      "damaged_count": 5,
+      "missing_count": 2,
+      "uncertain_count": 1,
+      "intact_count": 17,
+      "damaged_parts": [
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "fender_rear_left",
+        "fender_rear_right"
+      ],
+      "missing_parts": [
+        "tailgate",
+        "windshield_rear"
+      ],
+      "uncertain_parts": [
+        "roof_rear"
+      ],
+      "subagent_views": [
+        "front_left",
+        "front_right",
+        "rear_right",
+        "right",
+        "left",
+        "rear_left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前格栅",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯"
+            ],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "尾门",
+              "后备箱盖",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃"
+            ],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    },
+    {
+      "lead": "167111",
+      "status": "success",
+      "photos": 12,
+      "duration_seconds": 264.12,
+      "overall_severity": "moderate",
+      "structural_damage_flag": true,
+      "damaged_count": 5,
+      "missing_count": 2,
+      "uncertain_count": 5,
+      "intact_count": 13,
+      "damaged_parts": [
+        "bumper_rear",
+        "taillight_rear_left",
+        "taillight_rear_right",
+        "fender_rear_left",
+        "fender_rear_right"
+      ],
+      "missing_parts": [
+        "tailgate",
+        "windshield_rear"
+      ],
+      "uncertain_parts": [
+        "mirror_left",
+        "door_front_right",
+        "door_rear_right",
+        "mirror_right",
+        "roof_rear"
+      ],
+      "subagent_views": [
+        "front_left",
+        "front_right",
+        "rear_right",
+        "right",
+        "left",
+        "rear_left"
+      ],
+      "coverage_summary": {
+        "covered_views": [
+          "front_left",
+          "front_right",
+          "rear_left",
+          "rear_right",
+          "left",
+          "right"
+        ],
+        "missing_critical_views": [
+          "front",
+          "rear"
+        ],
+        "coverage_gaps": [
+          {
+            "missing_view": "front",
+            "display_name": "车头正前",
+            "impacted_regions": [
+              "front",
+              "roof_front"
+            ],
+            "impacted_parts": [
+              "引擎盖",
+              "前格栅",
+              "前保险杠",
+              "左前大灯",
+              "右前大灯"
+            ],
+            "suggested_action": "补拍车头正前照片"
+          },
+          {
+            "missing_view": "rear",
+            "display_name": "车尾正后",
+            "impacted_regions": [
+              "rear",
+              "roof_rear"
+            ],
+            "impacted_parts": [
+              "尾门",
+              "后备箱盖",
+              "后保险杠",
+              "左后尾灯",
+              "右后尾灯",
+              "后挡风玻璃"
+            ],
+            "suggested_action": "补拍车尾正后照片"
+          }
+        ]
+      },
+      "error": ""
+    }
+  ]
+}

@@ -1,0 +1,223 @@
+{
+  "photo_views": [
+    {
+      "photo_id": "167111-01.png",
+      "view_id": "auxiliary",
+      "confidence": "high",
+      "reason": "中华人民共和国机动车行驶证，用于提取车辆登记信息"
+    },
+    {
+      "photo_id": "167111-02.png",
+      "view_id": "front_left",
+      "confidence": "medium",
+      "reason": "车头朝向镜头，左前大灯和左前翼子板明显比右侧更完整、面积更大，车头略带向左偏转的角度"
+    },
+    {
+      "photo_id": "167111-03.png",
+      "view_id": "front_right",
+      "confidence": "high",
+      "reason": "车头朝向画面左前方，右前大灯、右前翼子板及右前轮拱清晰可见，右侧车身延伸更明显"
+    },
+    {
+      "photo_id": "167111-04.png",
+      "view_id": "rear_left",
+      "confidence": "medium",
+      "reason": "车尾朝向镜头，后部严重损毁，左后翼子板及左后轮区域可见面积略大于右侧，略带左偏角度"
+    },
+    {
+      "photo_id": "167111-05.png",
+      "view_id": "right",
+      "confidence": "high",
+      "reason": "右后侧车身可见，右后门、右后翼子板、充电口盖及加油口盖完整呈现，右侧正侧特征明显"
+    },
+    {
+      "photo_id": "167111-06.png",
+      "view_id": "left",
+      "confidence": "high",
+      "reason": "左后侧车身可见，左后门、左后翼子板、左后轮及C柱完整呈现，左侧正侧特征明显"
+    },
+    {
+      "photo_id": "167111-07.png",
+      "view_id": "interior",
+      "confidence": "high",
+      "reason": "车内后排座椅，棕红色真皮内饰，不参与外观识别"
+    },
+    {
+      "photo_id": "167111-08.png",
+      "view_id": "interior",
+      "confidence": "high",
+      "reason": "后备箱内部，可见钢化玻璃碎渣及内饰，不参与外观识别"
+    },
+    {
+      "photo_id": "167111-09.png",
+      "view_id": "auxiliary",
+      "confidence": "high",
+      "reason": "前风挡下沿VIN码特写，用于提取车架号"
+    },
+    {
+      "photo_id": "167111-10.png",
+      "view_id": "rear_left",
+      "confidence": "high",
+      "reason": "车尾朝画面右方，左后翼子板、左后轮及左C柱大面积可见，左侧车身延伸明显"
+    },
+    {
+      "photo_id": "167111-11.png",
+      "view_id": "interior",
+      "confidence": "high",
+      "reason": "前排驾驶舱，主驾座椅、方向盘及中控台可见，不参与外观识别"
+    },
+    {
+      "photo_id": "167111-12.png",
+      "view_id": "rear_right",
+      "confidence": "high",
+      "reason": "车尾朝画面左方，右后翼子板、右后门及右侧车身延伸明显，尾部严重损毁"
+    }
+  ],
+  "view_groups": {
+    "front": [],
+    "front_left": [
+      {
+        "id": "167111-02.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-02.png",
+        "name": "167111-02.png",
+        "_planner_view": "front_left",
+        "_planner_confidence": "medium",
+        "_planner_reason": "车头朝向镜头，左前大灯和左前翼子板明显比右侧更完整、面积更大，车头略带向左偏转的角度"
+      }
+    ],
+    "front_right": [
+      {
+        "id": "167111-03.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-03.png",
+        "name": "167111-03.png",
+        "_planner_view": "front_right",
+        "_planner_confidence": "high",
+        "_planner_reason": "车头朝向画面左前方，右前大灯、右前翼子板及右前轮拱清晰可见，右侧车身延伸更明显"
+      }
+    ],
+    "rear": [],
+    "rear_left": [
+      {
+        "id": "167111-10.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-10.png",
+        "name": "167111-10.png",
+        "_planner_view": "rear_left",
+        "_planner_confidence": "high",
+        "_planner_reason": "车尾朝画面右方，左后翼子板、左后轮及左C柱大面积可见，左侧车身延伸明显"
+      },
+      {
+        "id": "167111-04.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-04.png",
+        "name": "167111-04.png",
+        "_planner_view": "rear_left",
+        "_planner_confidence": "medium",
+        "_planner_reason": "车尾朝向镜头，后部严重损毁，左后翼子板及左后轮区域可见面积略大于右侧，略带左偏角度"
+      }
+    ],
+    "rear_right": [
+      {
+        "id": "167111-12.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-12.png",
+        "name": "167111-12.png",
+        "_planner_view": "rear_right",
+        "_planner_confidence": "high",
+        "_planner_reason": "车尾朝画面左方，右后翼子板、右后门及右侧车身延伸明显，尾部严重损毁"
+      }
+    ],
+    "left": [
+      {
+        "id": "167111-06.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-06.png",
+        "name": "167111-06.png",
+        "_planner_view": "left",
+        "_planner_confidence": "high",
+        "_planner_reason": "左后侧车身可见，左后门、左后翼子板、左后轮及C柱完整呈现，左侧正侧特征明显"
+      }
+    ],
+    "right": [
+      {
+        "id": "167111-05.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-05.png",
+        "name": "167111-05.png",
+        "_planner_view": "right",
+        "_planner_confidence": "high",
+        "_planner_reason": "右后侧车身可见，右后门、右后翼子板、充电口盖及加油口盖完整呈现，右侧正侧特征明显"
+      }
+    ],
+    "interior": [
+      {
+        "id": "167111-07.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-07.png",
+        "name": "167111-07.png"
+      },
+      {
+        "id": "167111-08.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-08.png",
+        "name": "167111-08.png"
+      },
+      {
+        "id": "167111-11.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-11.png",
+        "name": "167111-11.png"
+      }
+    ],
+    "auxiliary": [
+      {
+        "id": "167111-01.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-01.png",
+        "name": "167111-01.png"
+      },
+      {
+        "id": "167111-09.png",
+        "path": "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_167111/167111-09.png",
+        "name": "167111-09.png"
+      }
+    ],
+    "unknown": []
+  },
+  "coverage_gaps": [
+    {
+      "missing_view": "front",
+      "display_name": "车头正前",
+      "impacted_regions": [
+        "front",
+        "roof_front"
+      ],
+      "impacted_parts": [],
+      "suggested_action": "补拍车头正前照片"
+    },
+    {
+      "missing_view": "rear",
+      "display_name": "车尾正后",
+      "impacted_regions": [
+        "rear",
+        "roof_rear"
+      ],
+      "impacted_parts": [],
+      "suggested_action": "补拍车尾正后照片"
+    }
+  ],
+  "workflow_plan": {
+    "summary": "已覆盖外观视角：front_left, front_right, rear_left, rear_right, left, right",
+    "priority_views": [
+      "front_left",
+      "front_right",
+      "rear_left",
+      "rear_right",
+      "left",
+      "right"
+    ],
+    "missing_critical_views": [
+      "front",
+      "rear"
+    ]
+  },
+  "photo_types": {
+    "167111-01.png": "auxiliary",
+    "167111-02.png": "exterior",
+    "167111-03.png": "exterior",
+    "167111-04.png": "exterior",
+    "167111-05.png": "exterior",
+    "167111-06.png": "exterior"
+  }
+}

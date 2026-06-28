@@ -1,0 +1,895 @@
+{
+  "run": 96,
+  "elapsed": 170.64113092422485,
+  "photo_count": 12,
+  "covered_views": [
+    "front_left",
+    "front_right",
+    "rear_left",
+    "rear_right",
+    "left",
+    "right"
+  ],
+  "covered_view_count": 6,
+  "subagent_count": 6,
+  "subagent_summaries": [
+    {
+      "view_id": "right",
+      "part_count": 6
+    },
+    {
+      "view_id": "front_left",
+      "part_count": 11
+    },
+    {
+      "view_id": "front_right",
+      "part_count": 11
+    },
+    {
+      "view_id": "rear_right",
+      "part_count": 8
+    },
+    {
+      "view_id": "rear_left",
+      "part_count": 8
+    },
+    {
+      "view_id": "left",
+      "part_count": 6
+    }
+  ],
+  "total_parts": 25,
+  "uncertain_count": 0,
+  "uncertain_part_ids": [],
+  "status_counts": {
+    "intact": 16,
+    "damaged": 9
+  },
+  "review_summary": "",
+  "parts": [
+    {
+      "part_id": "hood",
+      "part_name": "引擎盖",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 引擎盖主体可见，漆面光滑完整，中央蔚来标识完好，无明显凹陷、划痕或变形；[front_right] 引擎盖主体完整可见，漆面光亮平整，无凹陷、划痕或变形，中央蔚来标识完好",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "引擎盖主体可见，漆面光滑完整，中央蔚来标识完好，无明显凹陷、划痕或变形"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "引擎盖主体完整可见，漆面光亮平整，无凹陷、划痕或变形，中央蔚来标识完好"
+        }
+      ]
+    },
+    {
+      "part_id": "bumper_front",
+      "part_name": "前保险杠",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 前保险杠主体面板可见，牌照区域被白色遮挡但周边面板完好，无明显凹陷、划痕或变形；[front_right] 前保险杠主体可见，右侧部分完整，下格栅及雾灯区域无明显损伤；可见黄色检测标识贴纸（非损伤）",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "前保险杠主体面板可见，牌照区域被白色遮挡但周边面板完好，无明显凹陷、划痕或变形"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "前保险杠主体可见，右侧部分完整，下格栅及雾灯区域无明显损伤；可见黄色检测标识贴纸（非损伤）"
+        }
+      ]
+    },
+    {
+      "part_id": "headlight_front_left",
+      "part_name": "左前大灯",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 左前大灯灯体完整可见，灯罩透明无裂纹、无破损、无进水痕迹",
+      "evidence_photo": [
+        "167111-02.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "左前大灯灯体完整可见，灯罩透明无裂纹、无破损、无进水痕迹"
+        }
+      ]
+    },
+    {
+      "part_id": "headlight_front_right",
+      "part_name": "右前大灯",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_right] 右前大灯灯壳完整，分体式灯组（日行灯+主灯）清晰可见，无裂纹、破损或进水痕迹",
+      "evidence_photo": [
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "右前大灯灯壳完整，分体式灯组（日行灯+主灯）清晰可见，无裂纹、破损或进水痕迹"
+        }
+      ]
+    },
+    {
+      "part_id": "grille_front",
+      "part_name": "前格栅",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 前格栅区域（ES8封闭式前脸）可见，下部进气口格栅完整，无变形或缺失；[front_right] 前格栅（蔚来X-Bar造型）可见，下部黑色格栅条完整，无变形或断裂",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "前格栅区域（ES8封闭式前脸）可见，下部进气口格栅完整，无变形或缺失"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "前格栅（蔚来X-Bar造型）可见，下部黑色格栅条完整，无变形或断裂"
+        }
+      ]
+    },
+    {
+      "part_id": "fender_front_left",
+      "part_name": "左前翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 左前翼子板面板从该角度可见，漆面平整光滑，无明显凹陷、划痕或变形",
+      "evidence_photo": [
+        "167111-02.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "左前翼子板面板从该角度可见，漆面平整光滑，无明显凹陷、划痕或变形"
+        }
+      ]
+    },
+    {
+      "part_id": "fender_front_right",
+      "part_name": "右前翼子板",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_right] 右前翼子板主体可见，弧面光滑无凹陷，漆面无划痕，与前车门接缝正常",
+      "evidence_photo": [
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "右前翼子板主体可见，弧面光滑无凹陷，漆面无划痕，与前车门接缝正常"
+        }
+      ]
+    },
+    {
+      "part_id": "windshield_front",
+      "part_name": "前挡风玻璃",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "high",
+      "notes": "[front_left] 前挡风玻璃整体可见，玻璃透明完整，无裂纹或碎裂；[front_right] 前挡风玻璃整体可见，无裂纹、碎裂或星状破损，玻璃表面干净",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "前挡风玻璃整体可见，玻璃透明完整，无裂纹或碎裂"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "前挡风玻璃整体可见，无裂纹、碎裂或星状破损，玻璃表面干净"
+        }
+      ]
+    },
+    {
+      "part_id": "tailgate",
+      "part_name": "尾门",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "车尾区域单元统一结论（tailgate + 后挡风玻璃）；[rear_right] 尾门整体严重塌陷变形，结构撕裂，尾门整体轮廓已不完整，右上角可见明显撕裂口，无法正常关闭；[rear_left] 尾门区域严重塌陷变形，结构明显垮塌，金属面板向内凹陷并伴随撕裂，与后翼子板交界处断裂",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "尾门整体严重塌陷变形，结构撕裂，尾门整体轮廓已不完整，右上角可见明显撕裂口，无法正常关闭"
+        },
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "尾门区域严重塌陷变形，结构明显垮塌，金属面板向内凹陷并伴随撕裂，与后翼子板交界处断裂"
+        }
+      ]
+    },
+    {
+      "part_id": "bumper_rear",
+      "part_name": "后保险杠",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "[rear_right] 后保险杠严重损毁，保险杠面罩大面积撕裂、脱落，金属加强骨架外露，下沿结构完全断裂，需更换；[rear_left] 后保险杠可见部分严重变形，与车身脱离，结构断裂，后保险杠覆盖件已不完整",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "后保险杠严重损毁，保险杠面罩大面积撕裂、脱落，金属加强骨架外露，下沿结构完全断裂，需更换"
+        },
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "后保险杠可见部分严重变形，与车身脱离，结构断裂，后保险杠覆盖件已不完整"
+        }
+      ]
+    },
+    {
+      "part_id": "taillight_rear_left",
+      "part_name": "左后尾灯",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "[rear_left] 左后尾灯灯具外壳碎裂破损，灯腔结构已不完整，内部元件暴露",
+      "evidence_photo": [
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左后尾灯灯具外壳碎裂破损，灯腔结构已不完整，内部元件暴露"
+        }
+      ]
+    },
+    {
+      "part_id": "taillight_rear_right",
+      "part_name": "右后尾灯",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "[rear_right] 右后尾灯灯罩破裂、灯壳变形，灯具结构已不完整，部分灯组碎片散落",
+      "evidence_photo": [
+        "167111-12.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后尾灯灯罩破裂、灯壳变形，灯具结构已不完整，部分灯组碎片散落"
+        }
+      ]
+    },
+    {
+      "part_id": "windshield_rear",
+      "part_name": "后挡风玻璃",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "车尾区域单元统一结论（tailgate + 后挡风玻璃）；[rear_right] 后挡风玻璃区域可见破碎及缺失，玻璃碎裂明显，密封条脱落；[rear_left] 后挡风玻璃完全碎裂塌陷，玻璃碎片散落，窗框严重变形向内塌陷",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "后挡风玻璃区域可见破碎及缺失，玻璃碎裂明显，密封条脱落"
+        },
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "后挡风玻璃完全碎裂塌陷，玻璃碎片散落，窗框严重变形向内塌陷"
+        }
+      ]
+    },
+    {
+      "part_id": "door_front_left",
+      "part_name": "左前门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "low",
+      "notes": "[front_left] 车头左侧视角下，左前门门板主体基本不可见（被车头遮挡），仅能看到最前缘的少量边缘轮廓，无法完整判断门板状态；[rear_left] 左前门门板主体可见，未见明显凹陷、划痕或漆面脱落；[left] 门板主体清晰可见，门把手与腰线轮廓完整，漆面平整，无凹陷、划痕或变形；相邻部件严重受损，降低车门置信度：door_rear_left",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "uncertain",
+          "damage_level": "unknown",
+          "confidence": "low",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "车头左侧视角下，左前门门板主体基本不可见（被车头遮挡），仅能看到最前缘的少量边缘轮廓，无法完整判断门板状态"
+        },
+        {
+          "region": "rear_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左前门门板主体可见，未见明显凹陷、划痕或漆面脱落"
+        },
+        {
+          "region": "left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "门板主体清晰可见，门把手与腰线轮廓完整，漆面平整，无凹陷、划痕或变形"
+        }
+      ]
+    },
+    {
+      "part_id": "door_rear_left",
+      "part_name": "左后门",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "low",
+      "notes": "[front_left] 车头左侧视角下，左后门完全不在画面内或被前部车身遮挡，完全不可见；[rear_left] 左后门门板主体可见，门把手及腰线轮廓清晰，未见明显凹陷或变形；靠近尾部区域受事故波及但门板本身完好；[left] 门板上半部及C柱区域受后方撞击波及，出现明显凹陷与结构性变形，门框与窗框扭曲，门板本体也有损伤",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "uncertain",
+          "damage_level": "unknown",
+          "confidence": "low",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "车头左侧视角下，左后门完全不在画面内或被前部车身遮挡，完全不可见"
+        },
+        {
+          "region": "rear_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左后门门板主体可见，门把手及腰线轮廓清晰，未见明显凹陷或变形；靠近尾部区域受事故波及但门板本身完好"
+        },
+        {
+          "region": "left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "门板上半部及C柱区域受后方撞击波及，出现明显凹陷与结构性变形，门框与窗框扭曲，门板本体也有损伤"
+        }
+      ]
+    },
+    {
+      "part_id": "mirror_left",
+      "part_name": "左后视镜",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "[front_left] 左后视镜镜壳外侧在该角度下可见，外壳完整无裂纹、无破损；[left] 左侧后视镜外壳在图片左上角可见，壳体完整无裂纹，镜面无明显损伤",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "左后视镜镜壳外侧在该角度下可见，外壳完整无裂纹、无破损"
+        },
+        {
+          "region": "left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左侧后视镜外壳在图片左上角可见，壳体完整无裂纹，镜面无明显损伤"
+        }
+      ]
+    },
+    {
+      "part_id": "fender_rear_left",
+      "part_name": "左后翼子板",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "[rear_left] 左后翼子板严重塌陷变形，金属面板大面积向内凹陷并撕裂，与尾门连接处断裂，后轮拱区域结构垮塌；[left] 左后翼子板出现大面积深度凹陷与结构性褶皱变形，板件严重内凹，翼子板与轮罩、后门连接区域均被破坏，损伤范围远超20cm",
+      "evidence_photo": [
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左后翼子板严重塌陷变形，金属面板大面积向内凹陷并撕裂，与尾门连接处断裂，后轮拱区域结构垮塌"
+        },
+        {
+          "region": "left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "左后翼子板出现大面积深度凹陷与结构性褶皱变形，板件严重内凹，翼子板与轮罩、后门连接区域均被破坏，损伤范围远超20cm"
+        }
+      ]
+    },
+    {
+      "part_id": "door_front_right",
+      "part_name": "右前门",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "[right] 右前门门板主体完整可见，未见明显凹陷、划痕或变形；[front_right] 右前门板前部和上腰线轮廓可见（≥30%），表面平整无凹陷或划痕；因透视角度关系，后部车门主体观察受限；[rear_right] 右前门门板主体可见，门把手、腰线轮廓清晰，漆面完好，无明显凹陷或划痕",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右前门门板主体完整可见，未见明显凹陷、划痕或变形"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "右前门板前部和上腰线轮廓可见（≥30%），表面平整无凹陷或划痕；因透视角度关系，后部车门主体观察受限"
+        },
+        {
+          "region": "rear_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右前门门板主体可见，门把手、腰线轮廓清晰，漆面完好，无明显凹陷或划痕"
+        }
+      ]
+    },
+    {
+      "part_id": "door_rear_right",
+      "part_name": "右后门",
+      "status": "damaged",
+      "damage_level": "moderate",
+      "confidence": "medium",
+      "notes": "[right] 右后门后部及上沿靠近C柱区域可见明显变形，与后方严重损坏区域相连；[front_right] 右后门处于视角中远端，门板可见面积不足30%，门把手轮廓不够清晰，无法完整确认门板状态；[rear_right] 右后门门板主体可见，门把手可辨认；门板靠近右后翼子板一侧受事故牵连，存在轻微擦伤/刮擦痕迹，门板主体未发生明显凹陷或变形",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "damaged",
+          "damage_level": "moderate",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后门后部及上沿靠近C柱区域可见明显变形，与后方严重损坏区域相连"
+        },
+        {
+          "region": "front_right",
+          "status": "uncertain",
+          "damage_level": "unknown",
+          "confidence": "low",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "右后门处于视角中远端，门板可见面积不足30%，门把手轮廓不够清晰，无法完整确认门板状态"
+        },
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "light",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后门门板主体可见，门把手可辨认；门板靠近右后翼子板一侧受事故牵连，存在轻微擦伤/刮擦痕迹，门板主体未发生明显凹陷或变形"
+        }
+      ]
+    },
+    {
+      "part_id": "mirror_right",
+      "part_name": "右后视镜",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "medium",
+      "notes": "[right] 右后视镜壳体可见，外形完整，未见明显裂纹或脱落；[front_right] 右后视镜外壳外侧可见（从车头右侧角度可见镜壳侧面），壳体完整无裂纹，转向灯镜片完好",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后视镜壳体可见，外形完整，未见明显裂纹或脱落"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "右后视镜外壳外侧可见（从车头右侧角度可见镜壳侧面），壳体完整无裂纹，转向灯镜片完好"
+        }
+      ]
+    },
+    {
+      "part_id": "fender_rear_right",
+      "part_name": "右后翼子板",
+      "status": "damaged",
+      "damage_level": "severe",
+      "confidence": "high",
+      "notes": "[right] 右后翼子板严重变形塌陷，金属面板撕裂扭曲，结构大面积破坏，可见明显褶皱和内陷；[rear_right] 右后翼子板严重塌陷变形，板面呈大面积内凹，钣金撕裂，轮拱上方区域结构严重破坏，需更换",
+      "evidence_photo": [
+        "167111-12.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后翼子板严重变形塌陷，金属面板撕裂扭曲，结构大面积破坏，可见明显褶皱和内陷"
+        },
+        {
+          "region": "rear_right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "右后翼子板严重塌陷变形，板面呈大面积内凹，钣金撕裂，轮拱上方区域结构严重破坏，需更换"
+        }
+      ]
+    },
+    {
+      "part_id": "roof_front",
+      "part_name": "车顶前部",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "low",
+      "notes": "[front_left] 车顶前部边缘在前挡风玻璃上方隐约可见，车顶轮廓线完整，未见凹陷、变形或缺失；[front_right] 车顶前部边缘（前挡风玻璃上方）可见，轮廓平滑无凹陷或变形",
+      "evidence_photo": [
+        "167111-02.png",
+        "167111-03.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "low",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "车顶前部边缘在前挡风玻璃上方隐约可见，车顶轮廓线完整，未见凹陷、变形或缺失"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "车顶前部边缘（前挡风玻璃上方）可见，轮廓平滑无凹陷或变形"
+        }
+      ]
+    },
+    {
+      "part_id": "roof_middle",
+      "part_name": "车顶中部",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "low",
+      "notes": "车顶/天窗区域单元统一结论：侧面/前斜视角显示车顶边缘平整无异常，车尾损坏不蔓延至车顶；[right] 车顶后部靠近C柱/D柱区域可见明显塌陷变形，与后部撞击变形区域相连；[left] 车顶中部及C柱顶部区域可见明显塌陷与扭曲变形，车顶轮廓严重破坏，金属板件撕裂外翻，结构性损伤显著",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "damaged",
+          "damage_level": "moderate",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "车顶后部靠近C柱/D柱区域可见明显塌陷变形，与后部撞击变形区域相连"
+        },
+        {
+          "region": "left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "车顶中部及C柱顶部区域可见明显塌陷与扭曲变形，车顶轮廓严重破坏，金属板件撕裂外翻，结构性损伤显著"
+        }
+      ]
+    },
+    {
+      "part_id": "roof_rear",
+      "part_name": "车顶后部",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "low",
+      "notes": "车顶/天窗区域单元统一结论：侧面/前斜视角显示车顶边缘平整无异常，车尾损坏不蔓延至车顶；[rear_right] 车顶后部边缘及D柱顶部轮廓可见，未观察到明显凹陷或变形；尾部事故未波及车顶结构；[rear_left] 车顶后部可见区域明显向下塌陷变形，车顶尾部结构被压垮，与后挡风玻璃区域连成一片破损区",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "rear_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "车顶后部边缘及D柱顶部轮廓可见，未观察到明显凹陷或变形；尾部事故未波及车顶结构"
+        },
+        {
+          "region": "rear_left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "车顶后部可见区域明显向下塌陷变形，车顶尾部结构被压垮，与后挡风玻璃区域连成一片破损区"
+        }
+      ]
+    },
+    {
+      "part_id": "sunroof_glass",
+      "part_name": "天窗玻璃",
+      "status": "intact",
+      "damage_level": "none",
+      "confidence": "low",
+      "notes": "车顶/天窗区域单元统一结论：侧面/前斜视角显示车顶边缘平整无异常，车尾损坏不蔓延至车顶；[right] 天窗/后玻璃区域严重破坏，玻璃碎裂缺失，可直接看到车辆内部结构；[front_left] 车顶区域仅露出少量边缘轮廓，天窗玻璃主体不可见；车顶边缘未见明显凹陷、变形或碎裂；[front_right] 车顶区域边缘可见，天窗玻璃面无明显裂纹或碎裂，玻璃与车顶金属面无明显错位；[left] 天窗及后挡风玻璃区域完全碎裂，可见大量玻璃碎片残留在车顶与车内，天窗玻璃基本缺失",
+      "evidence_photo": [
+        "167111-12.png",
+        "167111-02.png",
+        "167111-03.png",
+        "167111-10.png"
+      ],
+      "evidence_sources": [
+        {
+          "region": "right",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-12.png"
+          ],
+          "notes": "天窗/后玻璃区域严重破坏，玻璃碎裂缺失，可直接看到车辆内部结构"
+        },
+        {
+          "region": "front_left",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "low",
+          "evidence_photo": [
+            "167111-02.png"
+          ],
+          "notes": "车顶区域仅露出少量边缘轮廓，天窗玻璃主体不可见；车顶边缘未见明显凹陷、变形或碎裂"
+        },
+        {
+          "region": "front_right",
+          "status": "intact",
+          "damage_level": "none",
+          "confidence": "medium",
+          "evidence_photo": [
+            "167111-03.png"
+          ],
+          "notes": "车顶区域边缘可见，天窗玻璃面无明显裂纹或碎裂，玻璃与车顶金属面无明显错位"
+        },
+        {
+          "region": "left",
+          "status": "damaged",
+          "damage_level": "severe",
+          "confidence": "high",
+          "evidence_photo": [
+            "167111-10.png"
+          ],
+          "notes": "天窗及后挡风玻璃区域完全碎裂，可见大量玻璃碎片残留在车顶与车内，天窗玻璃基本缺失"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,483 @@
+{
+  "valid_runs": [
+    0,
+    2,
+    3,
+    4
+  ],
+  "valid_run_count": 4,
+  "parts": [
+    {
+      "part_id": "bumper_front",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "intact": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "none": 4
+      },
+      "confidence_high": 4,
+      "confidence_medium": 0,
+      "confidence_low": 0
+    },
+    {
+      "part_id": "bumper_rear",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "missing",
+      "status_breakdown": {
+        "missing": 2,
+        "damaged": 2
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 4
+      },
+      "confidence_high": 0,
+      "confidence_medium": 3,
+      "confidence_low": 1
+    },
+    {
+      "part_id": "door_front_left",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "uncertain": 1,
+        "damaged": 1,
+        "intact": 2
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "unknown": 1,
+        "light": 1,
+        "none": 2
+      },
+      "confidence_high": 1,
+      "confidence_medium": 1,
+      "confidence_low": 2
+    },
+    {
+      "part_id": "door_front_right",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "damaged": 1,
+        "intact": 2,
+        "uncertain": 1
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "moderate": 1,
+        "none": 2,
+        "unknown": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 2,
+      "confidence_low": 2
+    },
+    {
+      "part_id": "door_rear_left",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 2,
+        "damaged": 1,
+        "intact": 1
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 2,
+        "moderate": 1,
+        "none": 1
+      },
+      "confidence_high": 1,
+      "confidence_medium": 1,
+      "confidence_low": 2
+    },
+    {
+      "part_id": "door_rear_right",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "damaged": 1,
+        "uncertain": 2,
+        "intact": 1
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "severe": 1,
+        "unknown": 2,
+        "none": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "fender_front_left",
+      "total": 4,
+      "status_consistency": 0.75,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 3,
+        "intact": 1
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 3,
+        "none": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 0,
+      "confidence_low": 4
+    },
+    {
+      "part_id": "fender_front_right",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 2,
+        "intact": 2
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 2,
+        "none": 2
+      },
+      "confidence_high": 2,
+      "confidence_medium": 0,
+      "confidence_low": 2
+    },
+    {
+      "part_id": "fender_rear_left",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 4
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 2,
+        "moderate": 2
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "fender_rear_right",
+      "total": 4,
+      "status_consistency": 0.75,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 3,
+        "uncertain": 1
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "moderate",
+      "level_breakdown": {
+        "severe": 1,
+        "moderate": 2,
+        "unknown": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 0,
+      "confidence_low": 4
+    },
+    {
+      "part_id": "grille_front",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "intact": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "none": 4
+      },
+      "confidence_high": 4,
+      "confidence_medium": 0,
+      "confidence_low": 0
+    },
+    {
+      "part_id": "headlight_front_left",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 2,
+        "intact": 2
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 2,
+        "none": 2
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "headlight_front_right",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "intact": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "none": 4
+      },
+      "confidence_high": 3,
+      "confidence_medium": 1,
+      "confidence_low": 0
+    },
+    {
+      "part_id": "hood",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "intact": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "none": 4
+      },
+      "confidence_high": 4,
+      "confidence_medium": 0,
+      "confidence_low": 0
+    },
+    {
+      "part_id": "mirror_left",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 2,
+        "damaged": 1,
+        "intact": 1
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 2,
+        "moderate": 1,
+        "none": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "mirror_right",
+      "total": 4,
+      "status_consistency": 0.75,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "uncertain": 3,
+        "intact": 1
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "unknown": 3,
+        "none": 1
+      },
+      "confidence_high": 1,
+      "confidence_medium": 0,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "roof_front",
+      "total": 4,
+      "status_consistency": 0.75,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "uncertain": 1,
+        "intact": 3
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "unknown": 1,
+        "none": 3
+      },
+      "confidence_high": 0,
+      "confidence_medium": 3,
+      "confidence_low": 1
+    },
+    {
+      "part_id": "roof_middle",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "uncertain",
+      "status_breakdown": {
+        "damaged": 1,
+        "intact": 1,
+        "uncertain": 2
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "unknown",
+      "level_breakdown": {
+        "moderate": 1,
+        "none": 1,
+        "unknown": 2
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "roof_rear",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "intact": 1,
+        "damaged": 2,
+        "missing": 1
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "none": 1,
+        "severe": 3
+      },
+      "confidence_high": 0,
+      "confidence_medium": 3,
+      "confidence_low": 1
+    },
+    {
+      "part_id": "sunroof_glass",
+      "total": 4,
+      "status_consistency": 0.5,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 2,
+        "intact": 2
+      },
+      "level_consistency": 0.5,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 2,
+        "none": 2
+      },
+      "confidence_high": 0,
+      "confidence_medium": 2,
+      "confidence_low": 2
+    },
+    {
+      "part_id": "tailgate",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 4
+      },
+      "confidence_high": 0,
+      "confidence_medium": 3,
+      "confidence_low": 1
+    },
+    {
+      "part_id": "taillight_rear_left",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 4
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 3,
+        "moderate": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "taillight_rear_right",
+      "total": 4,
+      "status_consistency": 0.75,
+      "dominant_status": "damaged",
+      "status_breakdown": {
+        "damaged": 3,
+        "uncertain": 1
+      },
+      "level_consistency": 0.75,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 3,
+        "unknown": 1
+      },
+      "confidence_high": 0,
+      "confidence_medium": 1,
+      "confidence_low": 3
+    },
+    {
+      "part_id": "windshield_front",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "intact",
+      "status_breakdown": {
+        "intact": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "none",
+      "level_breakdown": {
+        "none": 4
+      },
+      "confidence_high": 4,
+      "confidence_medium": 0,
+      "confidence_low": 0
+    },
+    {
+      "part_id": "windshield_rear",
+      "total": 4,
+      "status_consistency": 1.0,
+      "dominant_status": "missing",
+      "status_breakdown": {
+        "missing": 4
+      },
+      "level_consistency": 1.0,
+      "dominant_level": "severe",
+      "level_breakdown": {
+        "severe": 4
+      },
+      "confidence_high": 0,
+      "confidence_medium": 3,
+      "confidence_low": 1
+    }
+  ]
+}

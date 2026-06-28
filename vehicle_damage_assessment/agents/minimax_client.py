@@ -1,0 +1,210 @@
+import json
+import base64
+import ssl
+import re
+import asyncio
+import aiohttp
+from typing import List, Dict, Any
+from config import MINIMAX_API_KEY, MINIMAX_BASE_URL, MINIMAX_MODEL, REQUEST_TIMEOUT
+from agents.image_utils import compress_image_to_base64
+
+# 临时处理 macOS SSL 证书问题
+# 生产环境应安装 certifi 或正确配置证书
+SSL_CONTEXT = ssl.create_default_context()
+SSL_CONTEXT.check_hostname = False
+SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+
+
+import random
+
+async def call_minimax(
+    messages: List[Dict[str, Any]],
+    temperature: float = 0.1,
+    max_tokens: int = 4000,
+    model: str | None = None,
+) -> str:
+    """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）"""
+    headers = {
+        "Authorization": f"Bearer {MINIMAX_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model or MINIMAX_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    last_exception = None
+    for attempt in range(1, 4):
+        try:
+            connector = aiohttp.TCPConnector(limit=1, force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as session:
+                async with session.post(
+                    MINIMAX_BASE_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_connect=30),
+                    ssl=SSL_CONTEXT,
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
+                    data = await resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    return clean_minimax_output(content)
+        except (aiohttp.ClientConnectionError, asyncio.TimeoutError, RuntimeError) as e:
+            last_exception = e
+            if attempt < 3:
+                # Exponential backoff with jitter: 2s, 7s, 15s base plus up to 3s jitter.
+                base = [2, 7, 15][attempt - 1]
+                wait = base + random.uniform(0, 3)
+                await asyncio.sleep(wait)
+            continue
+
+    raise RuntimeError(f"MiniMax API failed after 3 attempts: {last_exception}") from last_exception
+
+
+def clean_minimax_output(text: str) -> str:
+    """清洗 MiniMax 模型输出：去掉 thinking 标签和 markdown code block"""
+    # Remove thinking tags (both <think> and **** variants)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"\n?\s*\*\*\*\s*\n?", "", text)
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines[0].strip().startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def build_image_content(image_url: str, max_width: int = 1024) -> Dict[str, Any]:
+    """
+    构建图片内容。
+    支持传入 HTTP URL 或本地文件路径。
+    如果传入本地路径，会自动压缩并转为 base64 data URI。
+    """
+    if image_url.startswith("http://") or image_url.startswith("https://"):
+        return {"type": "image_url", "image_url": {"url": image_url}}
+
+    data_uri, _ = compress_image_to_base64(image_url, max_width=max_width)
+    return {"type": "image_url", "image_url": {"url": data_uri}}
+
+
+def extract_json(text: str) -> Any:
+    """从模型输出中提取 JSON（支持对象和数组），失败时返回 None"""
+    if not text or not text.strip():
+        return None
+
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith("json"):
+            text = text[4:].strip()
+
+    # 多层清洗尝试
+    cleaners = [
+        lambda t: t,
+        _fix_unescaped_quotes,
+        _fix_chinese_quotes,
+        lambda t: _fix_unescaped_quotes(_fix_chinese_quotes(t)),
+    ]
+
+    for cleaner in cleaners:
+        cleaned = cleaner(text)
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            # 尝试截取外层结构
+            result = _extract_outer_json(cleaned)
+            if result is not None:
+                return result
+            continue
+
+    return None
+
+
+def _extract_outer_json(text: str) -> Any | None:
+    """尝试从文本中提取最外层的 JSON 对象或数组"""
+    start_obj = text.find("{")
+    end_obj = text.rfind("}")
+    start_arr = text.find("[")
+    end_arr = text.rfind("]")
+
+    candidates = []
+    if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+        candidates.append((start_obj, end_obj + 1))
+    if start_arr != -1 and end_arr != -1 and end_arr > start_arr:
+        candidates.append((start_arr, end_arr + 1))
+
+    # 按起始位置排序，取最外层
+    candidates.sort()
+    for start, end in candidates:
+        snippet = text[start:end]
+        try:
+            return json.loads(snippet)
+        except json.JSONDecodeError:
+            # 再清洗一次
+            for cleaner in [_fix_unescaped_quotes, _fix_chinese_quotes, lambda t: _fix_unescaped_quotes(_fix_chinese_quotes(t))]:
+                try:
+                    return json.loads(cleaner(snippet))
+                except json.JSONDecodeError:
+                    continue
+    return None
+
+
+def _fix_chinese_quotes(text: str) -> str:
+    """把中文引号替换为普通字符或转义，避免破坏 JSON"""
+    # 中文双引号 “ ” 在 JSON 字符串内会非法
+    # 简单策略：先替换为 ASCII 双引号，再让 _fix_unescaped_quotes 处理转义
+    text = text.replace("“", '"').replace("”", '"')
+    text = text.replace("‘", "'").replace("’", "'")
+    return text
+
+
+def _fix_unescaped_quotes(text: str) -> str:
+    """
+    Fix unescaped quotes inside JSON string values.
+    This handles the common case where LLMs output quotes inside string values
+    without escaping them, e.g.: "desc": "has "special" marks"
+    """
+    result = []
+    in_string = False
+    escape_next = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if escape_next:
+            result.append(char)
+            escape_next = False
+            i += 1
+            continue
+        if char == "\\":
+            result.append(char)
+            escape_next = True
+            i += 1
+            continue
+        if char == '"':
+            if not in_string:
+                in_string = True
+                result.append(char)
+            else:
+                # Check if this quote is followed by JSON structural chars
+                # If so, it's a closing quote; otherwise it's an unescaped inner quote
+                j = i + 1
+                while j < len(text) and text[j] in " \t\n\r":
+                    j += 1
+                if j < len(text) and text[j] in ",:}]}":
+                    in_string = False
+                    result.append(char)
+                else:
+                    # This is an unescaped quote inside a string - escape it
+                    result.append('\\"')
+            i += 1
+            continue
+        result.append(char)
+        i += 1
+    return "".join(result)

@@ -1,0 +1,618 @@
+Watching for file changes with StatReloader
+[27/Jun/2026 23:36:05] "GET / HTTP/1.1" 200 17501
+Vision subagent failed for rear_right: Vision subagent for rear_right returned all-uncertain checklist; treating as anomaly
+Vision subagent rear_right failed: Vision subagent for rear_right returned all-uncertain checklist; treating as anomaly
+Retry failed for rear_right: Vision subagent for rear_right returned all-uncertain checklist; treating as anomaly
+[27/Jun/2026 23:40:50] "GET /api/assess/c91f8f8d-fa66-4e66-a693-780563f698f2?brand=NIO&model=ES8&year=2019&views=167111-02.png:front_left,167111-03.png:front_right,167111-04.png:left,167111-05.png:rear_left,167111-06.png:rear,167111-07.png:rear_right,167111-08.png:right,167111-09.png:front HTTP/1.1" 200 86668
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 27, 2026 - 23:36:04
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:37:07
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:37:15
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:37:24
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:37:44
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:38:00
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:38:18
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:39:15
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/view_mapping.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:40:21
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:40:30
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:51:02
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:51:13
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 10:51:34
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:21:02
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:21:11
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:37:56
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:38:12
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:39:43
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:46:30
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 11:53:29
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:05:32
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:05:39
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:18:38
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:18:54
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:19:06
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:19:35
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:19:44
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/assessment_orchestrator.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:20:18
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/assessment_orchestrator.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:20:55
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:21:55
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/assessment_orchestrator.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:22:21
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:36:00
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:36:31
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:36:39
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:37:44
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:37:56
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:38:13
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:38:38
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:58:42
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:59:06
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:59:23
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 12:59:53
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:02:38
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:02:59
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:08:44
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/vision_subagent.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:21:41
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:21:52
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:23:37
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:23:50
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:24:38
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
+/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/synthesizer.py changed, reloading.
+Performing system checks...
+
+System check identified no issues (0 silenced).
+June 28, 2026 - 13:24:53
+Django version 6.0.6, using settings 'core.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+
+WARNING: This is a development server. Do not use it in a production setting. Use a production WSGI or ASGI server instead.
+For more information on production servers see: https://docs.djangoproject.com/en/6.0/howto/deployment/
+Watching for file changes with StatReloader
