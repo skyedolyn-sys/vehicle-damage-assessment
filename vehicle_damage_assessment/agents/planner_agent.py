@@ -16,9 +16,22 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+import logging
+import os
 import re
 
 from agents.minimax_client import call_minimax, extract_json, build_image_content
+
+logger = logging.getLogger(__name__)
+# Also mirror planner logs to a dedicated file so Django's console log level
+# does not swallow them.
+_planner_file_handler = logging.FileHandler(
+    os.path.expanduser("~/vehicle_damage_assessment_planner.log"), mode="a", encoding="utf-8"
+)
+_planner_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_planner_file_handler.setLevel(logging.INFO)
+logger.addHandler(_planner_file_handler)
+logger.setLevel(logging.INFO)
 from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
@@ -222,8 +235,11 @@ async def _classify_photo_types(
         filename_type = _classify_photo_by_filename(photo_id)
         if filename_type:
             type_map[photo_id] = filename_type
+            logger.info("[planner] photo %s classified by filename as %s", photo_id, filename_type)
         else:
             pending.append(photo)
+
+    logger.info("[planner] classify pending count=%d, filename resolved=%d", len(pending), len(type_map))
 
     if not pending:
         return type_map
@@ -255,12 +271,16 @@ async def _classify_photo_types(
         content.append(_build_image_content(photo, max_width=_PLANNER_THUMB_WIDTH))
 
     messages = [{"role": "user", "content": content}]
+    raw = ""
     try:
         raw = await call_minimax(messages, temperature=0.0, max_tokens=2000)
-    except Exception:
+        logger.info("[planner] classify raw length=%d", len(raw))
+    except Exception as exc:
+        logger.warning("[planner] classify call_minimax failed: %s", exc, exc_info=True)
         raw = ""
     result = extract_json(raw) or {}
     if not isinstance(result, dict):
+        logger.warning("[planner] classify extract_json did not return dict: %s", type(result))
         result = {}
 
     for item in result.get("classifications", []):
@@ -270,13 +290,16 @@ async def _classify_photo_types(
         photo_type = item.get("photo_type", "unknown").lower()
         if photo_id and photo_type in PHOTO_TYPE_CATEGORIES:
             type_map[photo_id] = photo_type
+            logger.info("[planner] photo %s classified by LLM as %s", photo_id, photo_type)
 
     # Any still-unclassified pending photos default to exterior (safest for damage assessment).
     for photo in pending:
         photo_id = photo.get("id", "")
         if photo_id and photo_id not in type_map:
             type_map[photo_id] = "exterior"
+            logger.info("[planner] photo %s defaulted to exterior", photo_id)
 
+    logger.info("[planner] final type_map: %s", type_map)
     return type_map
 
 
@@ -476,28 +499,35 @@ async def planner_agent(
         content.append(_build_image_content(photo))
 
     messages = [{"role": "user", "content": content}]
+    raw = ""
     try:
         raw = await call_minimax(messages, temperature=0.0, max_tokens=4000)
+        logger.info("[planner] primary call_minimax raw length=%d", len(raw))
     except Exception as exc:
         # If the primary LLM call fails completely (e.g. server disconnect),
         # fall through to deterministic assignment instead of crashing the whole
         # pipeline.
+        logger.warning("[planner] primary call_minimax failed: %s", exc, exc_info=True)
         raw = ""
     result = extract_json(raw) or {}
+    logger.info("[planner] primary extract_json type=%s keys=%s", type(result).__name__, list(result.keys()) if isinstance(result, dict) else "n/a")
 
     if not isinstance(result, dict):
         result = {}
 
     photo_views = _clean_view_entries(result.get("photo_views", []))
+    logger.info("[planner] primary photo_views count=%d known=%d", len(photo_views), sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")))
 
     # Fallback for models that return an "analysis" array instead of photo_views.
     if not photo_views or all(e["view_id"] == "unknown" for e in photo_views):
         adapted = _adapt_legacy_analysis(result)
         if adapted:
+            logger.info("[planner] adapted legacy analysis into %d entries", len(adapted))
             photo_views = adapted
 
     # Retry once with a stronger schema reminder if we still have no useful labels.
     if not photo_views or all(e["view_id"] == "unknown" for e in photo_views):
+        logger.warning("[planner] primary produced no usable photo_views; retrying with stronger prompt")
         retry_content = [
             {"type": "text", "text": system_prompt},
             {
@@ -515,13 +545,17 @@ async def planner_agent(
         retry_messages = [{"role": "user", "content": retry_content}]
         try:
             raw = await call_minimax(retry_messages, temperature=0.0, max_tokens=4000)
+            logger.info("[planner] retry call_minimax raw length=%d", len(raw))
         except Exception as exc:
+            logger.warning("[planner] retry call_minimax failed: %s", exc, exc_info=True)
             raw = ""
         retry_result = extract_json(raw) or {}
+        logger.info("[planner] retry extract_json type=%s keys=%s", type(retry_result).__name__, list(retry_result.keys()) if isinstance(retry_result, dict) else "n/a")
         if isinstance(retry_result, dict):
             photo_views = _clean_view_entries(retry_result.get("photo_views", []))
             if not photo_views:
                 photo_views = _adapt_legacy_analysis(retry_result)
+            logger.info("[planner] retry photo_views count=%d known=%d", len(photo_views), sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")))
 
     # Ensure every input photo has an entry; default to unknown if missing.
     seen_ids = {e["photo_id"] for e in photo_views}
@@ -542,11 +576,13 @@ async def planner_agent(
             }
         )
         seen_ids.add(photo_id)
+        logger.info("[planner] backfilled missing entry for %s as %s", photo_id, hint or "unknown")
 
     # Final safety net: if the planner still has no exterior views, use filename
     # hints for all exterior-looking photos. This should not be needed often but
     # prevents a complete pipeline collapse when the API returns garbled JSON.
     if not any(e["view_id"] in EXTERIOR_VIEWS for e in photo_views):
+        logger.warning("[planner] no exterior views after initial photo_views; entering safety net 1")
         # Prefer photo_type-aware hints: only map photos known to be exterior.
         for photo in photos:
             photo_id = photo.get("id", "")
@@ -572,6 +608,7 @@ async def planner_agent(
         # a deterministic filename index rotation. This is coarse but prevents a
         # total pipeline collapse.
         if not any(e["view_id"] in EXTERIOR_VIEWS for e in photo_views):
+            logger.warning("[planner] still no exterior views; entering rotation fallback")
             remaining_exterior = [
                 p for p in photos
                 if p.get("id") and p.get("id") not in seen_ids
@@ -598,6 +635,7 @@ async def planner_agent(
     # did not trigger because *some* exterior views existed.
     current_exterior_views = {e["view_id"] for e in photo_views if e["view_id"] in EXTERIOR_VIEWS}
     if len(current_exterior_views) < 4:
+        logger.warning("[planner] only %d exterior views; entering fill fallback", len(current_exterior_views))
         remaining_photos = [
             p for p in photos
             if p.get("id") and p.get("id") not in seen_ids
@@ -626,16 +664,28 @@ async def planner_agent(
             seen_ids.add(photo_id)
             current_exterior_views.add(assigned_view)
 
+    logger.info("[planner] assembled photo_views count=%d exterior_views=%s", len(photo_views), sorted(current_exterior_views))
+
     # Build a stable plan that excludes non-exterior photos. photo_types was
     # already computed at the top of the function.
     stable_plan = _stabilize_plan(photo_views, photos, photo_types)
+    logger.info(
+        "[planner] stable_plan priority_views=%s missing=%s",
+        stable_plan.get("workflow_plan", {}).get("priority_views", []),
+        stable_plan.get("workflow_plan", {}).get("missing_critical_views", []),
+    )
 
     # Fallback: if too few exterior views were identified, retry focusing only on
     # ambiguous (unknown/exterior) photos to reduce catastrophic planner failures.
     covered_views = stable_plan.get("workflow_plan", {}).get("priority_views", [])
     if len(covered_views) < 3:
+        logger.warning("[planner] covered views < 3, running fallback_replan")
         stable_plan = await _fallback_replan(
             stable_plan, photo_views, photos, vehicle_prior, photo_types
+        )
+        logger.info(
+            "[planner] fallback_replan priority_views=%s",
+            stable_plan.get("workflow_plan", {}).get("priority_views", []),
         )
 
     stable_plan["photo_types"] = photo_types
@@ -645,6 +695,11 @@ async def planner_agent(
     # canonical exterior view so the downstream orchestrator always has
     # something to assess.
     final_plan = _ensure_exterior_coverage(stable_plan, photos, photo_types)
+    logger.info(
+        "[planner] final_plan priority_views=%s groups_keys_with_items=%s",
+        final_plan.get("workflow_plan", {}).get("priority_views", []),
+        [k for k, v in final_plan.get("view_groups", {}).items() if v],
+    )
     return final_plan
 
 

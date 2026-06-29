@@ -118,8 +118,48 @@ def validate_and_enrich(
     }
 
     result.setdefault("uncertain_items", [])
+    result["uncertain_items"] = _filter_uncertain_items(result["uncertain_items"], complete_parts)
 
     return result
+
+
+def _filter_uncertain_items(
+    uncertain_items: List[Dict[str, Any]],
+    parts: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Filter uncertain_items to only those whose referenced part is still uncertain.
+
+    Vision subagents emit uncertain_items for visibility warnings (e.g. "右前门
+    完整性").  Once the synthesizer resolves that part as intact or damaged, the
+    warning is no longer actionable and should not appear in the final review
+    list.  Items that cannot be mapped to a specific part are kept.
+    """
+    status_by_name: Dict[str, str] = {}
+    name_to_id: Dict[str, str] = {}
+    for p in parts:
+        part_id = p.get("part_id", "")
+        part_name = p.get("part_name", "")
+        if part_id:
+            status_by_name[part_id] = p.get("status", "uncertain")
+        if part_name:
+            status_by_name[part_name] = p.get("status", "uncertain")
+            name_to_id[part_name] = part_id
+
+    filtered: List[Dict[str, Any]] = []
+    for item in uncertain_items:
+        if not isinstance(item, dict):
+            continue
+        item_text = item.get("item", "") or ""
+        # Try to find a matching part id/name in the item text.
+        matched_status: str | None = None
+        for name, status in status_by_name.items():
+            if name and name in item_text:
+                matched_status = status
+                break
+        if matched_status is None or matched_status == "uncertain":
+            filtered.append(item)
+
+    return filtered
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +193,7 @@ def _validate_and_enrich_with_topology(
 
     # 4. Ensure backward-compatible keys exist
     enriched.setdefault("uncertain_items", result.get("uncertain_items", []))
+    enriched["uncertain_items"] = _filter_uncertain_items(enriched["uncertain_items"], enriched.get("parts", []))
 
     # Ensure structural_damage_reasoning dict exists (old format)
     structural_flag = enriched.get("structural_damage_flag", False)

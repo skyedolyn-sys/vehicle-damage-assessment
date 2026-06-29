@@ -67,11 +67,11 @@ VIEW_WEIGHTS: Dict[str, Dict[str, Any]] = {
     },
     "mirror_left": {
         "primary": {"left"},
-        "secondary": {"front_left"},
+        "secondary": {"front_left", "rear_left"},
     },
     "mirror_right": {
         "primary": {"right"},
-        "secondary": {"front_right"},
+        "secondary": {"front_right", "rear_right"},
     },
 }
 
@@ -213,12 +213,21 @@ def _resolve_status_weighted(candidates: List[Dict[str, Any]], part_id: str) -> 
             return "damaged"
         if any(s == "intact" for s in primary_statuses):
             return "intact"
-        # primary all uncertain: trust secondary if it reports damage.
-        if any(c.get("status") == "damaged" for c in secondary):
+        # primary all uncertain: prefer intact if secondary has no damage;
+        # only trust secondary damage reports when there is no intact source.
+        secondary_statuses = [c.get("status", "uncertain") for c in secondary]
+        if any(s == "damaged" for s in secondary_statuses) and not any(s == "intact" for s in secondary_statuses):
             return "damaged"
+        if any(s == "intact" for s in secondary_statuses):
+            return "intact"
         return "uncertain"
 
-    # No primary coverage: fall back to conservative merge.
+    # No primary coverage: prefer intact when there is any intact evidence and
+    # no damaged evidence; otherwise fall back to conservative merge.
+    secondary_statuses = [c.get("status", "uncertain") for c in secondary]
+    if any(s == "intact" for s in secondary_statuses) and not any(s == "damaged" for s in secondary_statuses):
+        return "intact"
+
     return _resolve_status(candidates)
 
 
@@ -258,8 +267,13 @@ def _resolve_status_roof(candidates: List[Dict[str, Any]]) -> str:
         # If at least one primary view says intact, prefer intact (low confidence).
         if primary_intact:
             return "intact"
-        # Primary all uncertain/damaged single source: fall back to secondary.
-        if any(c.get("status") == "damaged" for c in secondary):
+        # Primary all uncertain: prefer intact if secondary has any intact;
+        # only trust secondary damage when no intact source exists.
+        secondary_intact = [c for c in secondary if c.get("status") == "intact"]
+        secondary_damaged = [c for c in secondary if c.get("status") == "damaged"]
+        if secondary_intact and not secondary_damaged:
+            return "intact"
+        if secondary_damaged and not secondary_intact:
             return "damaged"
         return "uncertain"
 
@@ -270,7 +284,9 @@ def _resolve_status_roof(candidates: List[Dict[str, Any]]) -> str:
         return "uncertain"
     if secondary and all(c.get("status") == "damaged" for c in secondary):
         return "damaged"
-    return "uncertain"
+    # Conflicting or incomplete secondary coverage: prefer intact because rear
+    # structure damage frequently spills over onto roof edges.
+    return "intact"
 
 
 def _resolve_damage_level_roof(
@@ -540,6 +556,37 @@ def _apply_adjacency_rules(
                     f"{part_id} 从非主视角单源判为 severe，易受相邻严重损伤传染，降级为 moderate",
                 )
 
+        # Rule 6: doors damaged solely from diagonal (non-side) views are often
+        # spill-over from a severely damaged adjacent fender or bumper.  When the
+        # door panel itself is not clearly damaged in a pure side view, prefer
+        # intact to avoid false positives.
+        if (
+            part_id.startswith("door_")
+            and new_part.get("status") == "damaged"
+        ):
+            evidence_regions = {
+                src.get("region", "") for src in new_part.get("evidence_sources", [])
+                if src.get("status") == "damaged"
+            }
+            primary_regions = set(VIEW_WEIGHTS.get(part_id, {}).get("primary", set()))
+            # No pure side-view damage source: all evidence comes from diagonal angles.
+            if primary_regions and not any(r in primary_regions for r in evidence_regions):
+                severe_adjacent_fenders = [
+                    pid for pid, status in neighbor_status.items()
+                    if status in ("damaged", "missing")
+                    and pid.startswith("fender_")
+                    and neighbor_level.get(pid) == "severe"
+                ]
+                if severe_adjacent_fenders:
+                    new_part["status"] = "intact"
+                    new_part["damage_level"] = "none"
+                    new_part["damage_type"] = []
+                    new_part["confidence"] = "low"
+                    _append_note(
+                        new_part,
+                        f"车门损伤证据仅来自斜向视角，且相邻翼子板严重受损（{', '.join(severe_adjacent_fenders)}），判定为相邻损伤的视觉延伸，改为 intact",
+                    )
+
         updated.append(new_part)
 
     return updated
@@ -710,10 +757,59 @@ def synthesizer_agent(
     # Apply adjacency consistency rules.
     final_parts = _apply_adjacency_rules(final_parts, topology)
 
+    # Mirrors often appear at the edge of corner photos; if no view reports
+    # damage and at least one view describes the visible shell as intact, fall
+    # back to intact rather than leaving the mirror uncertain.
+    final_parts = _apply_mirror_fallback(final_parts, parts_by_id)
+
+    # Severe rear collisions may label crushed parts as "missing"; prefer
+    # "damaged severe" when any source reports actual damage.
+    final_parts = _apply_rear_missing_to_damaged_fallback(final_parts, parts_by_id)
+
     return {
         "parts": final_parts,
         "uncertain_items": all_uncertain_items,
     }
+
+
+def _apply_mirror_fallback(
+    merged_parts: List[Dict[str, Any]],
+    parts_by_id: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Resolve mirrors as intact when no view reports damage.
+
+    Side mirrors are small protruding parts that often sit at the photo edge.
+    Vision subagents may mark them uncertain even when the visible shell looks
+    intact.  If no source reports damaged/missing, prefer intact over uncertain
+    because real mirror damage is visually obvious in a collision photo set.
+    """
+    updated: List[Dict[str, Any]] = []
+
+    for part in merged_parts:
+        part_id = part.get("part_id", "")
+        if part_id not in ("mirror_left", "mirror_right") or part.get("status") != "uncertain":
+            updated.append(part)
+            continue
+
+        candidates = parts_by_id.get(part_id, [])
+        if not candidates:
+            updated.append(part)
+            continue
+
+        statuses = [c.get("status", "uncertain") for c in candidates]
+        if any(s in ("damaged", "missing") for s in statuses):
+            updated.append(part)
+            continue
+
+        new_part = dict(part)
+        new_part["status"] = "intact"
+        new_part["damage_level"] = "none"
+        new_part["damage_type"] = []
+        new_part["confidence"] = "low"
+        _append_note(new_part, "后视镜无损伤证据，从 conservative 推断为 intact")
+        updated.append(new_part)
+
+    return updated
 
 
 def _unify_region_units(
@@ -745,3 +841,45 @@ def _unify_region_units(
             m["notes"] = f"{note}；{existing}" if existing and not existing.startswith(note) else note or existing
 
     return list(merged_by_id.values())
+
+
+REAR_CORE_PARTS = {
+    "trunk_lid", "tailgate", "bumper_rear",
+    "taillight_rear_left", "taillight_rear_right", "windshield_rear",
+}
+
+
+def _apply_rear_missing_to_damaged_fallback(
+    merged_parts: List[Dict[str, Any]],
+    parts_by_id: Dict[str, List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Downgrade rear-core 'missing' to 'damaged' when any source saw damage.
+
+    In severe rear collisions the model may label a crushed part as 'missing'
+    because it is no longer recognizable.  For downstream reporting it is more
+    useful to keep the conclusion as 'damaged severe' as long as there is any
+    damaged evidence from any view.
+    """
+    updated: List[Dict[str, Any]] = []
+    for part in merged_parts:
+        part_id = part.get("part_id", "")
+        if (
+            part_id not in REAR_CORE_PARTS
+            or part.get("status") != "missing"
+        ):
+            updated.append(part)
+            continue
+
+        candidates = parts_by_id.get(part_id, [])
+        if any(c.get("status") == "damaged" for c in candidates):
+            new_part = dict(part)
+            new_part["status"] = "damaged"
+            new_part["damage_level"] = "severe"
+            new_part["damage_type"] = [dt for dt in part.get("damage_type", []) if dt != "missing"] or ["deformation"]
+            _append_note(new_part, "存在 damaged 证据，将 missing 回退为 damaged severe")
+            updated.append(new_part)
+            continue
+
+        updated.append(part)
+
+    return updated

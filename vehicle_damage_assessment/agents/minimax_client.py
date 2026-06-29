@@ -2,11 +2,24 @@ import json
 import base64
 import ssl
 import re
+import os
 import asyncio
 import aiohttp
+import logging
+import time
 from typing import List, Dict, Any
 from config import MINIMAX_API_KEY, MINIMAX_BASE_URL, MINIMAX_MODEL, REQUEST_TIMEOUT
 from agents.image_utils import compress_image_to_base64
+
+logger = logging.getLogger(__name__)
+# Dedicated file log for API diagnostics; Django console log level may swallow INFO.
+_minimax_file_handler = logging.FileHandler(
+    os.path.expanduser("~/vehicle_damage_assessment_minimax.log"), mode="a", encoding="utf-8"
+)
+_minimax_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_minimax_file_handler.setLevel(logging.INFO)
+logger.addHandler(_minimax_file_handler)
+logger.setLevel(logging.INFO)
 
 # 临时处理 macOS SSL 证书问题
 # 生产环境应安装 certifi 或正确配置证书
@@ -24,12 +37,16 @@ async def call_minimax(
     model: str | None = None,
 ) -> str:
     """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）"""
+    call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+    request_model = model or MINIMAX_MODEL
+    logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s", call_id, request_model, temperature, max_tokens)
+
     headers = {
         "Authorization": f"Bearer {MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
-        "model": model or MINIMAX_MODEL,
+        "model": request_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -37,6 +54,7 @@ async def call_minimax(
 
     last_exception = None
     for attempt in range(1, 4):
+        start = time.perf_counter()
         try:
             connector = aiohttp.TCPConnector(limit=1, force_close=True)
             async with aiohttp.ClientSession(connector=connector) as session:
@@ -47,38 +65,119 @@ async def call_minimax(
                     timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_connect=30),
                     ssl=SSL_CONTEXT,
                 ) as resp:
+                    elapsed = time.perf_counter() - start
                     if resp.status != 200:
                         text = await resp.text()
+                        logger.warning("[minimax:%s] attempt=%d status=%d elapsed=%.2fs text=%s", call_id, attempt, resp.status, elapsed, text[:500])
                         raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
                     data = await resp.json()
                     content = data["choices"][0]["message"]["content"]
-                    return clean_minimax_output(content)
+                    cleaned = clean_minimax_output(content)
+                    logger.info("[minimax:%s] attempt=%d success elapsed=%.2fs raw_len=%d cleaned_len=%d", call_id, attempt, elapsed, len(content), len(cleaned))
+                    return cleaned
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError, RuntimeError) as e:
+            elapsed = time.perf_counter() - start
             last_exception = e
+            logger.warning("[minimax:%s] attempt=%d failed elapsed=%.2fs error=%s", call_id, attempt, elapsed, e)
             if attempt < 3:
                 # Exponential backoff with jitter: 2s, 7s, 15s base plus up to 3s jitter.
                 base = [2, 7, 15][attempt - 1]
                 wait = base + random.uniform(0, 3)
+                logger.info("[minimax:%s] sleeping %.2fs before retry", call_id, wait)
                 await asyncio.sleep(wait)
             continue
 
+    logger.error("[minimax:%s] all 3 attempts failed: %s", call_id, last_exception)
     raise RuntimeError(f"MiniMax API failed after 3 attempts: {last_exception}") from last_exception
 
 
 def clean_minimax_output(text: str) -> str:
-    """清洗 MiniMax 模型输出：去掉 thinking 标签和 markdown code block"""
-    # Remove thinking tags (both <think> and **** variants)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    text = re.sub(r"\n?\s*\*\*\*\s*\n?", "", text)
+    """清洗 MiniMax 模型输出：去掉 thinking 标签和 markdown code block，保留有效 JSON。
+
+    MiniMax-M3 有时会把完整思考过程包裹在 <think>...</think> 标签里，而真正的
+    JSON 答案可能放在 think 标签**之外**；但也可能出现 think 标签里就包含 JSON
+    的情况。本函数会：
+    1. 先提取 think 标签外的文本；
+    2. 如果外部文本为空，再尝试从 think 标签内部提取 JSON；
+    3. 去掉 markdown code block 标记。
+    """
+    if not text:
+        return ""
+
+    original = text
+
+    # 1. Strip markdown code fences first so they don't hide JSON inside think tags.
+    text = _strip_code_fences(original)
+
+    # 2. Split content inside and outside <think> tags.
+    outside_parts: List[str] = []
+    inside_parts: List[str] = []
+    idx = 0
+    while True:
+        start = text.find("<think>", idx)
+        if start == -1:
+            outside_parts.append(text[idx:])
+            break
+        outside_parts.append(text[idx:start])
+        end = text.find("</think>", start + len("<think>"))
+        if end == -1:
+            inside_parts.append(text[start + len("<think>"):])
+            break
+        inside_parts.append(text[start + len("<think>"):end])
+        idx = end + len("</think>")
+
+    # 3. Prefer content outside think tags; that's where the answer usually lives.
+    outside = "".join(outside_parts).strip()
+    if outside:
+        return _strip_code_fences(outside)
+
+    # 4. If everything was inside think tags, try to find JSON in there.
+    inside = "".join(inside_parts).strip()
+    if inside:
+        # Try to return just the JSON-looking part if one exists.
+        json_candidate = _extract_json_like_snippet(inside)
+        if json_candidate:
+            return json_candidate
+        return _strip_code_fences(inside)
+
+    return ""
+
+
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown ```json ... ``` fences."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
-        if lines[0].strip().startswith("```"):
+        if lines and lines[0].strip().startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         text = "\n".join(lines).strip()
     return text
+
+
+def _extract_json_like_snippet(text: str) -> str:
+    """If the text contains a JSON object/array, return the outermost one."""
+    start_obj = text.find("{")
+    end_obj = text.rfind("}")
+    start_arr = text.find("[")
+    end_arr = text.rfind("]")
+
+    candidates = []
+    if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+        candidates.append((start_obj, end_obj + 1))
+    if start_arr != -1 and end_arr != -1 and end_arr > start_arr:
+        candidates.append((start_arr, end_arr + 1))
+
+    candidates.sort()
+    for start, end in candidates:
+        snippet = text[start:end]
+        try:
+            json.loads(snippet)
+            return snippet
+        except json.JSONDecodeError:
+            continue
+    return ""
 
 
 def build_image_content(image_url: str, max_width: int = 1024) -> Dict[str, Any]:

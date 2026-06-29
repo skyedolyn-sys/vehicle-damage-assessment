@@ -624,7 +624,8 @@ class TestSynthesizerRoofRules:
 class TestSynthesizerMirrorRules:
     """Mirror visibility should be resolved conservatively."""
 
-    def test_mirror_single_primary_uncertain_stays_uncertain(self):
+    def test_mirror_single_primary_uncertain_becomes_intact(self):
+        """No damage evidence for a mirror -> prefer intact over uncertain."""
         region_results = [
             {
                 "region": "left",
@@ -644,7 +645,8 @@ class TestSynthesizerMirrorRules:
         ]
         result = synthesizer_agent(region_results)
         part = next(p for p in result["parts"] if p["part_id"] == "mirror_left")
-        assert part["status"] == "uncertain"
+        assert part["status"] == "intact"
+        assert part["confidence"] == "low"
 
     def test_mirror_primary_intact_overrides_secondary_damage(self):
         region_results = [

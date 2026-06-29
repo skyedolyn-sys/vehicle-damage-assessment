@@ -12,6 +12,8 @@ subagent focused on visual recognition.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 from typing import Any, Dict, List, Tuple
 
@@ -19,6 +21,16 @@ from agents.minimax_client import call_minimax, build_image_content, extract_jso
 from agents.view_mapping import get_display_name, get_regions_for_view, ROOF_SUB_REGION_TO_PARTS
 from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 from models import PartActualState, Status, DamageLevel
+
+logger = logging.getLogger(__name__)
+# Dedicated file log so Django console log level does not swallow subagent diagnostics.
+_vision_file_handler = logging.FileHandler(
+    os.path.expanduser("~/vehicle_damage_assessment_vision.log"), mode="a", encoding="utf-8"
+)
+_vision_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_vision_file_handler.setLevel(logging.INFO)
+logger.addHandler(_vision_file_handler)
+logger.setLevel(logging.INFO)
 
 
 #: Mapping from common LLM-output part id aliases back to canonical ids.
@@ -184,6 +196,7 @@ _SYSTEM_PROMPT_TEMPLATE = """你是车辆外部损伤识别专家。本次任务
 2. 可见性判定（按优先级）：
    - 完全可见或主要部分可见（占比 >= 30% 或可见关键轮廓）：给出明确结论，优先标 intact 或 damaged。
    - 远端部件在透视中占比小但无变形/划痕/裂纹等异常：可判定 intact，confidence=low，notes 中说明"远端可见，无明显变形"。
+   - 后视镜等突出部件被部分遮挡但可见部分完整且无裂纹/变形：优先标 intact，confidence=low，notes 中说明"可见部分完整，未见损伤"。
    - 完全不可见（占比 < 10% 或被严重遮挡）：status=uncertain，damage_level=unknown，confidence=low。
    - 局部可见但无法确认完整状态：可标 uncertain，但如仅边缘可见且无异常，优先尝试标 intact 并说明"局部可见，未见异常"。
 3. 车顶区域部件（roof_front, roof_middle, roof_rear, sunroof_glass, roof_rack）在带俯角的视角中只要能看到相应车顶边缘，也必须输出结论；只要车顶边缘可见且未看到凹陷、变形、裂纹、玻璃碎裂等明显异常，优先标 intact；只有当确实看到上述异常时才标 damaged；完全看不到车顶才标 uncertain。
@@ -239,9 +252,12 @@ def _build_checklist(view_id: str, topology: Any) -> List[Dict[str, str]]:
     seen_ids: set = set()
 
     for region in regions:
-        part_ids = ROOF_SUB_REGION_TO_PARTS.get(region, []) if region.startswith("roof_") else [
-            n.part_id for n in topology.get_nodes_by_region(region) if topology
-        ]
+        if region.startswith("roof_"):
+            part_ids = ROOF_SUB_REGION_TO_PARTS.get(region, [])
+        elif topology is not None:
+            part_ids = [n.part_id for n in topology.get_nodes_by_region(region)]
+        else:
+            part_ids = []
 
         for part_id in part_ids:
             if part_id in seen_ids or view_id not in visibility.get(part_id, []):
@@ -259,8 +275,8 @@ _CHECKLIST_HINTS: List[tuple[str, str]] = [
     ("roof_rack", "车顶/天窗在本视角中通常只能看到边缘轮廓；若仅见边缘且无凹陷/变形/裂纹/玻璃碎裂等明显异常，应标 intact；只有当主体面板明确可见变形、裂纹、碎裂或明显缺失时才标 damaged"),
     ("headlight_", "灯具本体可见即可评估；无裂纹/破损/进水痕迹则标 intact；远端仅见灯壳边缘时可标 uncertain"),
     ("taillight_", "灯具本体可见即可评估；无裂纹/破损/进水痕迹则标 intact；远端仅见灯壳边缘时可标 uncertain"),
-    ("mirror_", "后视镜本体可见即可评估；必须看到镜壳外侧，外壳完整无裂纹则标 intact；仅看到镜面反光、镜壳内侧或边缘时标 uncertain"),
-    ("door_", "门板主体可见（≥30% 面积或门把手/腰线轮廓清晰）才给出明确结论；仅看到车门边缘/窗框/门缝时请标 uncertain；有凹陷/划痕/变形/漆面脱落才标 damaged"),
+    ("mirror_", "后视镜：只要镜壳外侧任何部分可见，且该可见部分无裂纹/破损/变形/脱落，即标 intact（confidence=low），并在 notes 中说明可见程度；只有当后视镜完全不可见，或可见部分存在明确损伤时，才标 damaged/uncertain"),
+    ("door_", "严格区分门板主体与相邻翼子板/C柱/轮拱：仅评估车门面板本身（含门把手、腰线、窗下沿以下板面）。若凹陷/变形实际位于翼子板、C柱或后翼子板轮拱区域，即使靠近车门边缘，也不要判为车门损伤；车门板主体无异常则标 intact；门板主体明确可见凹陷/划痕/变形/漆面脱落才标 damaged；仅看到车门边缘/窗框/门缝时请标 uncertain"),
     ("fender_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
     ("bumper_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
     ("windshield", "玻璃区域可见即可评估；无裂纹/碎裂则标 intact"),
@@ -442,8 +458,11 @@ async def vision_subagent(
         content.append(build_image_content(photo.get("path") or photo.get("url", ""), max_width=IMAGE_MAX_WIDTH))
 
     messages = [{"role": "user", "content": content}]
+    photo_ids = [p.get("id", "") for p in photos if p.get("id")]
+    logger.info("[vision:%s] start checklist=%s photo_ids=%s", view_id, [c["part_id"] for c in checklist], photo_ids)
     raw = await call_minimax(messages, temperature=0.0, max_tokens=3000)
     result = extract_json(raw) or {}
+    logger.info("[vision:%s] result type=%s has_parts=%s has_uncertain=%s", view_id, type(result).__name__, bool(result.get("parts")), bool(result.get("uncertain_items")))
 
     if not isinstance(result, dict):
         result = {}
@@ -479,10 +498,10 @@ async def vision_subagent(
     # complete, predictable set of parts for this view.  Use the concrete states
     # produced by the LLM as context when deciding whether an omission is likely
     # a genuine visibility problem or just a forgotten checklist item.
-    photo_ids = [p.get("id", "") for p in photos if p.get("id")]
     checklist_ids = {item["part_id"] for item in checklist}
     missing_checklist_ids = checklist_ids - seen_ids
     concrete_states = [s for s in part_actual_states if s.status != Status.UNCERTAIN]
+    logger.info("[vision:%s] seen=%s missing=%s concrete=%d", view_id, sorted(seen_ids), sorted(missing_checklist_ids), len(concrete_states))
     for item in checklist:
         if item["part_id"] not in missing_checklist_ids:
             continue
@@ -490,6 +509,7 @@ async def vision_subagent(
         part_actual_states.append(state)
         parts.append(state.to_legacy_dict())
         seen_ids.add(item["part_id"])
+        logger.info("[vision:%s] backfilled %s as %s", view_id, item["part_id"], state.status.value)
 
     uncertain_items = [
         item for item in result.get("uncertain_items", [])
@@ -504,10 +524,12 @@ async def vision_subagent(
     # If the subagent produced no parts at all, something went wrong with JSON
     # parsing or the model ignored the schema.  Treat that as an anomaly.
     if not parts:
+        logger.error("[vision:%s] no parts produced; raising anomaly", view_id)
         raise RuntimeError(
             f"Vision subagent for {view_id} returned no parts; treating as anomaly"
         )
 
+    logger.info("[vision:%s] done parts=%d uncertain_items=%d additional=%d", view_id, len(parts), len(uncertain_items), len(additional_findings))
     return {
         "view_id": view_id,
         "regions": get_regions_for_view(view_id),

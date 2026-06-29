@@ -14,10 +14,10 @@ multi-subagent workflow:
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List
-
 import logging
+import os
 import traceback
+from typing import Any, Dict, List
 
 from agents import build_vehicle_topology, vehicle_prior_agent
 from agents.planner_agent import planner_agent
@@ -35,6 +35,14 @@ from models.topology import VehicleTopology
 
 
 logger = logging.getLogger(__name__)
+# Dedicated file log so Django console log level does not swallow orchestrator diagnostics.
+_orchestrator_file_handler = logging.FileHandler(
+    os.path.expanduser("~/vehicle_damage_assessment_orchestrator.log"), mode="a", encoding="utf-8"
+)
+_orchestrator_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+_orchestrator_file_handler.setLevel(logging.INFO)
+logger.addHandler(_orchestrator_file_handler)
+logger.setLevel(logging.INFO)
 
 
 async def assessment_orchestrator(
@@ -88,12 +96,15 @@ async def assessment_orchestrator(
         return len(expected_ids)
 
     async def run_view_subagent(view_id: str) -> Dict[str, Any]:
+        photos = view_groups.get(view_id, [])
+        logger.info("[orchestrator] dispatching vision subagent view=%s photo_count=%d", view_id, len(photos))
         async with semaphore:
             try:
-                return await vision_subagent(view_id, view_groups.get(view_id, []), vehicle_prior, topology)
+                result = await vision_subagent(view_id, photos, vehicle_prior, topology)
+                logger.info("[orchestrator] vision subagent %s returned parts=%d states=%d", view_id, len(result.get("parts", [])), len(result.get("part_actual_states", [])))
+                return result
             except Exception as exc:
-                logger.error("Vision subagent failed for %s: %s", view_id, exc)
-                logger.debug(traceback.format_exc())
+                logger.error("[orchestrator] Vision subagent failed for %s: %s", view_id, exc, exc_info=True)
                 raise
 
     def _is_anomaly(result: Dict[str, Any], view_id: str) -> bool:
