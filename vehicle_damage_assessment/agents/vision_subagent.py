@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
-from agents.view_mapping import get_display_name, get_regions_for_view
+from agents.view_mapping import get_display_name, get_regions_for_view, ROOF_SUB_REGION_TO_PARTS
 from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 from models import PartActualState, Status, DamageLevel
 
@@ -205,8 +205,6 @@ _SYSTEM_PROMPT_TEMPLATE = """你是车辆外部损伤识别专家。本次任务
 
 def _build_covered_regions_text(view_id: str, topology: Any) -> str:
     """Build a human-readable description of regions covered by this view."""
-    from agents.view_mapping import ROOF_SUB_REGION_TO_PARTS
-
     regions = get_regions_for_view(view_id)
     if not regions:
         return "（本次视角不覆盖外部区域）"
@@ -216,13 +214,12 @@ def _build_covered_regions_text(view_id: str, topology: Any) -> str:
         # Roof sub-regions map to specific standard parts.
         if region.startswith("roof_"):
             part_ids = ROOF_SUB_REGION_TO_PARTS.get(region, [])
-            part_names = []
             seen = set()
-            for pid in part_ids:
-                name = topology.nodes[pid].node_name if topology and pid in topology.nodes else pid
-                if name not in seen:
-                    part_names.append(name)
-                    seen.add(name)
+            part_names = [
+                topology.nodes[pid].node_name if topology and pid in topology.nodes else pid
+                for pid in part_ids
+                if not (pid in seen or seen.add(pid))
+            ]
             lines.append(f"- {region} 区域（车顶）：{', '.join(part_names) if part_names else '无具体部件'}")
             continue
 
@@ -233,17 +230,7 @@ def _build_covered_regions_text(view_id: str, topology: Any) -> str:
 
 
 def _build_checklist(view_id: str, topology: Any) -> List[Dict[str, str]]:
-    """Return the focused checklist of parts this view should clearly evaluate.
-
-    Unlike the old region-based checklist, this version filters parts by the
-    visibility map in ``PARTS_TOPOLOGY``.  Only parts whose canonical visibility
-    angles include the current ``view_id`` are required.  Distant or opposite-side
-    parts that merely fall inside the broad region are moved to
-    ``additional_findings`` instead of being forced into ``parts``.
-
-    The list is sorted by region and then by catalog order for stable prompts.
-    """
-    from agents.view_mapping import ROOF_SUB_REGION_TO_PARTS
+    """Return the focused checklist of parts this view should clearly evaluate."""
     from config import PARTS_TOPOLOGY
 
     visibility = PARTS_TOPOLOGY.get("visibility", {})
@@ -252,17 +239,12 @@ def _build_checklist(view_id: str, topology: Any) -> List[Dict[str, str]]:
     seen_ids: set = set()
 
     for region in regions:
-        if region.startswith("roof_"):
-            part_ids = ROOF_SUB_REGION_TO_PARTS.get(region, [])
-        else:
-            nodes = topology.get_nodes_by_region(region) if topology else []
-            part_ids = [n.part_id for n in nodes]
+        part_ids = ROOF_SUB_REGION_TO_PARTS.get(region, []) if region.startswith("roof_") else [
+            n.part_id for n in topology.get_nodes_by_region(region) if topology
+        ]
 
         for part_id in part_ids:
-            if part_id in seen_ids:
-                continue
-            # Only require the part if this view is one of its canonical angles.
-            if view_id not in visibility.get(part_id, []):
+            if part_id in seen_ids or view_id not in visibility.get(part_id, []):
                 continue
             seen_ids.add(part_id)
             part_name = PARTS_BY_ID.get(part_id, {}).get("part_name", part_id)
@@ -271,42 +253,37 @@ def _build_checklist(view_id: str, topology: Any) -> List[Dict[str, str]]:
     return checklist
 
 
+_CHECKLIST_HINTS: List[tuple[str, str]] = [
+    ("roof_", "车顶/天窗在本视角中通常只能看到边缘轮廓；若仅见边缘且无凹陷/变形/裂纹/玻璃碎裂等明显异常，应标 intact；只有当主体面板明确可见变形、裂纹、碎裂或明显缺失时才标 damaged"),
+    ("sunroof_glass", "车顶/天窗在本视角中通常只能看到边缘轮廓；若仅见边缘且无凹陷/变形/裂纹/玻璃碎裂等明显异常，应标 intact；只有当主体面板明确可见变形、裂纹、碎裂或明显缺失时才标 damaged"),
+    ("roof_rack", "车顶/天窗在本视角中通常只能看到边缘轮廓；若仅见边缘且无凹陷/变形/裂纹/玻璃碎裂等明显异常，应标 intact；只有当主体面板明确可见变形、裂纹、碎裂或明显缺失时才标 damaged"),
+    ("headlight_", "灯具本体可见即可评估；无裂纹/破损/进水痕迹则标 intact；远端仅见灯壳边缘时可标 uncertain"),
+    ("taillight_", "灯具本体可见即可评估；无裂纹/破损/进水痕迹则标 intact；远端仅见灯壳边缘时可标 uncertain"),
+    ("mirror_", "后视镜本体可见即可评估；必须看到镜壳外侧，外壳完整无裂纹则标 intact；仅看到镜面反光、镜壳内侧或边缘时标 uncertain"),
+    ("door_", "门板主体可见（≥30% 面积或门把手/腰线轮廓清晰）才给出明确结论；仅看到车门边缘/窗框/门缝时请标 uncertain；有凹陷/划痕/变形/漆面脱落才标 damaged"),
+    ("fender_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
+    ("bumper_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
+    ("windshield", "玻璃区域可见即可评估；无裂纹/碎裂则标 intact"),
+    ("hood", "主体可见即可评估；前保险杠若被白条、车牌、强光反光遮挡，遮挡区域不要判为损伤"),
+    ("grille_front", "主体可见即可评估；前保险杠若被白条、车牌、强光反光遮挡，遮挡区域不要判为损伤"),
+]
+
+
+def _hint_for_part(part_id: str) -> str:
+    """Return the visibility hint for a part id."""
+    for prefix, hint in _CHECKLIST_HINTS:
+        if part_id.startswith(prefix) or part_id == prefix:
+            return hint
+    return "该部件在本视角下应主体可见；无异常则标 intact，有异常按实际损伤程度选择 level"
+
+
 def _build_checklist_text(checklist: List[Dict[str, str]], view_id: str) -> str:
     """Format the checklist as numbered lines with visibility expectations."""
     if not checklist:
         return "（本次视角无强制检查的外部部件清单）"
 
-    lines = []
-    for i, item in enumerate(checklist, start=1):
-        part_id = item["part_id"]
-        part_name = item["part_name"]
-        # Visibility hint for the LLM.
-        if part_id.startswith("roof_") or part_id == "sunroof_glass" or part_id == "roof_rack":
-            hint = (
-                "车顶/天窗在本视角中通常只能看到边缘轮廓；若仅见边缘且无凹陷/变形/裂纹/玻璃碎裂等明显异常，应标 intact；"
-                "只有当主体面板明确可见变形、裂纹、碎裂或明显缺失时才标 damaged"
-            )
-        elif part_id in ("headlight_front_left", "headlight_front_right", "taillight_rear_left", "taillight_rear_right"):
-            hint = "灯具本体可见即可评估；无裂纹/破损/进水痕迹则标 intact；远端仅见灯壳边缘时可标 uncertain"
-        elif part_id in ("mirror_left", "mirror_right"):
-            hint = (
-                "后视镜本体可见即可评估；必须看到镜壳外侧，外壳完整无裂纹则标 intact；"
-                "仅看到镜面反光、镜壳内侧或边缘时标 uncertain"
-            )
-        elif part_id.startswith("door_"):
-            hint = "门板主体可见（≥30% 面积或门把手/腰线轮廓清晰）才给出明确结论；仅看到车门边缘/窗框/门缝时请标 uncertain；有凹陷/划痕/变形/漆面脱落才标 damaged"
-        elif part_id.startswith("fender_") or part_id in ("bumper_front", "bumper_rear"):
-            hint = "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"
-        elif "windshield" in part_id:
-            hint = "玻璃区域可见即可评估；无裂纹/碎裂则标 intact"
-        elif part_id in ("hood", "grille_front"):
-            hint = "主体可见即可评估；前保险杠若被白条、车牌、强光反光遮挡，遮挡区域不要判为损伤"
-        else:
-            hint = "该部件在本视角下应主体可见；无异常则标 intact，有异常按实际损伤程度选择 level"
-        lines.append(f"{i}. {part_id}（{part_name}）— {hint}")
-    if len(lines) == 0:
-        return "（本次视角无强制检查的外部部件清单）"
-    return "\n".join(lines)
+    lines = [f"{i}. {item['part_id']}（{item['part_name']}）— {_hint_for_part(item['part_id'])}" for i, item in enumerate(checklist, start=1)]
+    return "\n".join(lines) if lines else "（本次视角无强制检查的外部部件清单）"
 
 
 def _make_uncertain_part(
@@ -359,6 +336,15 @@ def _make_uncertain_part(
     )
 
 
+def _parse_string_or_list(raw: Any, sep: str = ",") -> List[str]:
+    """Normalize a string-or-list field from the LLM into a list of strings."""
+    if isinstance(raw, str):
+        if not raw or raw == "none":
+            return []
+        return [x.strip() for x in raw.split(sep) if x.strip()]
+    return [str(x) for x in raw if x]
+
+
 def _llm_dict_to_part_actual_state(data: Dict[str, Any], region: str) -> PartActualState:
     """Convert an LLM dict to PartActualState."""
     status_str = data.get("status", "uncertain")
@@ -377,21 +363,8 @@ def _llm_dict_to_part_actual_state(data: Dict[str, Any], region: str) -> PartAct
         except ValueError:
             damage_level = DamageLevel.UNKNOWN
 
-    damage_types: List[str] = []
-    raw_types = data.get("damage_type", data.get("damage_types", []))
-    if isinstance(raw_types, str):
-        if raw_types and raw_types != "none":
-            damage_types = [t.strip() for t in raw_types.split(",") if t.strip()]
-    elif isinstance(raw_types, list):
-        damage_types = [str(t) for t in raw_types if t]
-
-    evidence_photos: List[str] = []
-    raw_photos = data.get("evidence_photo", data.get("evidence_photos", []))
-    if isinstance(raw_photos, str):
-        if raw_photos:
-            evidence_photos = [p.strip() for p in raw_photos.split(",") if p.strip()]
-    elif isinstance(raw_photos, list):
-        evidence_photos = [str(p) for p in raw_photos if p]
+    damage_types = _parse_string_or_list(data.get("damage_type", data.get("damage_types", [])))
+    evidence_photos = _parse_string_or_list(data.get("evidence_photo", data.get("evidence_photos", [])))
 
     actual_visible = data.get("actual_visible", len(evidence_photos) > 0)
     actual_present = data.get("actual_present", status != Status.MISSING)

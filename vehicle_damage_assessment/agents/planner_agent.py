@@ -14,10 +14,11 @@ stable left/right judgements than the old per-batch photo_locator.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
-from agents.image_utils import compress_image_to_base64
-from agents.minimax_client import call_minimax, extract_json
+import re
+
+from agents.minimax_client import call_minimax, extract_json, build_image_content
 from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
@@ -33,40 +34,64 @@ from agents.view_mapping import (
 from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 
 
-#: Parts whose front-facing assessment strongly benefits from a pure front view.
-_FRONT_VIEW_PARTS = ["hood", "grille_front", "bumper_front", "headlight_front_left", "headlight_front_right"]
-
-#: Parts whose rear-facing assessment strongly benefits from a pure rear view.
-_REAR_VIEW_PARTS = ["tailgate", "trunk_lid", "bumper_rear", "taillight_rear_left", "taillight_rear_right", "windshield_rear"]
-
-
-def _impacted_parts_for_missing_view(view_id: str) -> List[str]:
-    """Return human-readable part names likely impacted by a missing exterior view."""
-    if view_id == "front":
-        return [PARTS_BY_ID[pid]["part_name"] for pid in _FRONT_VIEW_PARTS if pid in PARTS_BY_ID]
-    if view_id == "rear":
-        return [PARTS_BY_ID[pid]["part_name"] for pid in _REAR_VIEW_PARTS if pid in PARTS_BY_ID]
-    # For side / corner views, derive from the regions the view covers.
-    regions = get_regions_for_view(view_id)
-    impacted: List[str] = []
-    for pid, info in PARTS_BY_ID.items():
-        if info.get("part_category") in regions:
-            impacted.append(info["part_name"])
-    return impacted
-
-
 #: Thumbnail width used by the planner.  Smaller images reduce cost/latency
 #: while preserving enough detail for view classification.
 _PLANNER_THUMB_WIDTH = 384
 
+
+def _impacted_parts_for_missing_view(view_id: str) -> List[str]:
+    """Return human-readable part names likely impacted by a missing exterior view."""
+    regions = get_regions_for_view(view_id)
+    return [info["part_name"] for pid, info in PARTS_BY_ID.items() if info.get("part_category") in regions]
+
+
+#: Robust filename keyword patterns that strongly indicate auxiliary or interior
+#: photos. These are matched case-insensitively against the filename stem.
+_AUXILIARY_KEYWORDS = (
+    "行驶证", "证件", "vin", "铭牌", "license", "plate", "证", "牌",
+    "车架号", "登记证书", "保单", "发票",
+)
+_INTERIOR_KEYWORDS = ("车内", "内饰", "驾驶舱", "座椅", "方向盘", "仪表盘", "中控", "后排")
+
+
 #: Confidence score ordering for stable tie-breaking.
 _CONFIDENCE_ORDER = {"high": 2, "medium": 1, "low": 0}
 
-#: Filename keywords that strongly indicate auxiliary or interior photos.
-_AUXILIARY_KEYWORDS = (
-    "行驶证", "证件", "vin", "铭牌", "license", "plate", "证", "牌"
-)
-_INTERIOR_KEYWORDS = ("车内", "内饰", "驾驶舱", "座椅", "方向盘")
+
+#: Filename patterns that can be used as a deterministic view fallback when the
+#: LLM planner returns no usable labels. Mapping is ``stem_substring -> view_id``.
+#: Order matters: more specific patterns should come first.
+_FILENAME_VIEW_HINTS: List[Tuple[str, str]] = [
+    ("行驶证", "auxiliary"),
+    ("vin", "auxiliary"),
+    ("铭牌", "auxiliary"),
+    ("证件", "auxiliary"),
+    ("车牌", "auxiliary"),
+    ("内饰", "interior"),
+    ("车内", "interior"),
+    ("座椅", "interior"),
+    ("-01.", "auxiliary"),
+    ("-09.", "auxiliary"),
+    ("-07.", "interior"),
+    ("-08.", "interior"),
+    ("-11.", "interior"),
+]
+
+
+def _view_hint_from_filename(filename: str) -> str:
+    """Return a canonical view hint based on filename conventions.
+
+    This is a deterministic fallback used when the LLM planner produces no
+    usable labels. It is intentionally conservative: only map obviously
+    auxiliary/interior photos or well-known naming patterns.
+    """
+    if not filename:
+        return ""
+    lowered = filename.lower()
+    for pattern, view_id in _FILENAME_VIEW_HINTS:
+        if pattern.lower() in lowered:
+            return view_id
+    return ""
 
 _SYSTEM_PROMPT = f"""你是车辆照片视角规划专家。你的任务是一次性查看用户上传的所有车辆照片，为每张照片指定一个标准视角标签，并指出哪些外观视角缺失、需要补拍。
 
@@ -124,17 +149,9 @@ _SYSTEM_PROMPT = f"""你是车辆照片视角规划专家。你的任务是一�
 
 
 def _build_image_content(photo: Dict[str, Any], max_width: int = _PLANNER_THUMB_WIDTH) -> Dict[str, Any]:
-    """Build a compressed image content block for the planner.
-
-    Supports both local file paths and http(s) URLs.  Local files are
-    compressed and base64-encoded; remote URLs are passed through.
-    """
+    """Build a compressed image content block for the planner."""
     image_url = photo.get("path") or photo.get("url") or ""
-    if image_url.startswith(("http://", "https://")):
-        return {"type": "image_url", "image_url": {"url": image_url}}
-
-    data_uri, _ = compress_image_to_base64(image_url, max_width=max_width)
-    return {"type": "image_url", "image_url": {"url": data_uri}}
+    return build_image_content(image_url, max_width=max_width)
 
 
 def _clean_view_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -166,6 +183,22 @@ def _classify_photo_by_filename(filename: str) -> str:
         return "auxiliary"
     if any(kw in lowered for kw in _INTERIOR_KEYWORDS):
         return "interior"
+    return ""
+
+
+def _view_hint_from_filename(filename: str) -> str:
+    """Return a canonical view hint based on filename conventions.
+
+    This is a deterministic fallback used when the LLM planner produces no
+    usable labels. It is intentionally conservative: only map obviously
+    auxiliary/interior photos or well-known naming patterns.
+    """
+    if not filename:
+        return ""
+    lowered = filename.lower()
+    for pattern, view_id in _FILENAME_VIEW_HINTS:
+        if pattern.lower() in lowered:
+            return view_id
     return ""
 
 
@@ -421,6 +454,12 @@ async def planner_agent(
             "workflow_plan": {"summary": "没有照片", "priority_views": [], "missing_critical_views": []},
         }
 
+    # Classify photos up-front so every downstream fallback can rely on a
+    # stable photo_type map. This is critical: previous code ran the classifier
+    # after the LLM fallback, so exterior/unknown filters during rotation were
+    # always empty and the deterministic safety net could not assign views.
+    photo_types = await _classify_photo_types(photos, vehicle_prior)
+
     vehicle_name = vehicle_prior.get("vehicle", "该车")
     view_selection_prompt = get_view_selection_prompt()
 
@@ -437,7 +476,13 @@ async def planner_agent(
         content.append(_build_image_content(photo))
 
     messages = [{"role": "user", "content": content}]
-    raw = await call_minimax(messages, temperature=0.0, max_tokens=4000)
+    try:
+        raw = await call_minimax(messages, temperature=0.0, max_tokens=4000)
+    except Exception as exc:
+        # If the primary LLM call fails completely (e.g. server disconnect),
+        # fall through to deterministic assignment instead of crashing the whole
+        # pipeline.
+        raw = ""
     result = extract_json(raw) or {}
 
     if not isinstance(result, dict):
@@ -468,7 +513,10 @@ async def planner_agent(
             retry_content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
             retry_content.append(_build_image_content(photo))
         retry_messages = [{"role": "user", "content": retry_content}]
-        raw = await call_minimax(retry_messages, temperature=0.0, max_tokens=4000)
+        try:
+            raw = await call_minimax(retry_messages, temperature=0.0, max_tokens=4000)
+        except Exception as exc:
+            raw = ""
         retry_result = extract_json(raw) or {}
         if isinstance(retry_result, dict):
             photo_views = _clean_view_entries(retry_result.get("photo_views", []))
@@ -479,18 +527,107 @@ async def planner_agent(
     seen_ids = {e["photo_id"] for e in photo_views}
     for photo in photos:
         photo_id = photo.get("id", "")
-        if photo_id and photo_id not in seen_ids:
+        if not photo_id or photo_id in seen_ids:
+            continue
+        # If the LLM produced no usable label for this photo, try deterministic
+        # filename hints before giving up. This protects against JSON parsing
+        # failures that would otherwise drop all exterior coverage.
+        hint = _view_hint_from_filename(photo_id)
+        photo_views.append(
+            {
+                "photo_id": photo_id,
+                "view_id": hint or "unknown",
+                "confidence": "low" if hint else "low",
+                "reason": f"planner 未返回视角，按文件名兜底为 {hint}" if hint else "planner 未返回该照片的视角",
+            }
+        )
+        seen_ids.add(photo_id)
+
+    # Final safety net: if the planner still has no exterior views, use filename
+    # hints for all exterior-looking photos. This should not be needed often but
+    # prevents a complete pipeline collapse when the API returns garbled JSON.
+    if not any(e["view_id"] in EXTERIOR_VIEWS for e in photo_views):
+        # Prefer photo_type-aware hints: only map photos known to be exterior.
+        for photo in photos:
+            photo_id = photo.get("id", "")
+            if not photo_id or photo_id in seen_ids:
+                continue
+            photo_type = photo_types.get(photo_id, "")
+            if photo_type and photo_type not in ("exterior", "unknown"):
+                continue
+            hint = _view_hint_from_filename(photo_id)
+            if hint in EXTERIOR_VIEWS:
+                photo_views.append(
+                    {
+                        "photo_id": photo_id,
+                        "view_id": hint,
+                        "confidence": "low",
+                        "reason": f"无外观视角覆盖，按文件名兜底为 {hint}",
+                    }
+                )
+                seen_ids.add(photo_id)
+
+        # As a last resort, if there are still no exterior views and we have
+        # remaining exterior-classified photos, map them to corner views based on
+        # a deterministic filename index rotation. This is coarse but prevents a
+        # total pipeline collapse.
+        if not any(e["view_id"] in EXTERIOR_VIEWS for e in photo_views):
+            remaining_exterior = [
+                p for p in photos
+                if p.get("id") and p.get("id") not in seen_ids
+                and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
+            ]
+            if remaining_exterior:
+                corner_views = ["front_left", "front_right", "rear_left", "rear_right"]
+                for idx, photo in enumerate(remaining_exterior):
+                    photo_id = photo.get("id", "")
+                    assigned_view = corner_views[idx % len(corner_views)]
+                    photo_views.append(
+                        {
+                            "photo_id": photo_id,
+                            "view_id": assigned_view,
+                            "confidence": "low",
+                            "reason": "planner 未返回任何外观视角，按文件名顺序兜底分配",
+                        }
+                    )
+                    seen_ids.add(photo_id)
+
+    # Extra safety net: if we have very few exterior views, force-assign any
+    # remaining exterior/unknown photos to side/corner views. This handles the
+    # case where the LLM only labels a subset of photos and the first safety net
+    # did not trigger because *some* exterior views existed.
+    current_exterior_views = {e["view_id"] for e in photo_views if e["view_id"] in EXTERIOR_VIEWS}
+    if len(current_exterior_views) < 4:
+        remaining_photos = [
+            p for p in photos
+            if p.get("id") and p.get("id") not in seen_ids
+            and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
+        ]
+        target_views = ["front_left", "front_right", "rear_left", "rear_right", "left", "right"]
+        existing_idx = len(target_views)
+        for idx, photo in enumerate(remaining_photos):
+            photo_id = photo.get("id", "")
+            # Fill in missing views first, then cycle.
+            assigned_view = None
+            for view in target_views:
+                if view not in current_exterior_views:
+                    assigned_view = view
+                    break
+            if assigned_view is None:
+                assigned_view = target_views[idx % len(target_views)]
             photo_views.append(
                 {
                     "photo_id": photo_id,
-                    "view_id": "unknown",
+                    "view_id": assigned_view,
                     "confidence": "low",
-                    "reason": "planner 未返回该照片的视角",
+                    "reason": "外观视角覆盖不足，按缺失视角强制兜底分配",
                 }
             )
+            seen_ids.add(photo_id)
+            current_exterior_views.add(assigned_view)
 
-    # Classify photos and build a stable plan that excludes non-exterior photos.
-    photo_types = await _classify_photo_types(photos, vehicle_prior)
+    # Build a stable plan that excludes non-exterior photos. photo_types was
+    # already computed at the top of the function.
     stable_plan = _stabilize_plan(photo_views, photos, photo_types)
 
     # Fallback: if too few exterior views were identified, retry focusing only on
@@ -502,7 +639,104 @@ async def planner_agent(
         )
 
     stable_plan["photo_types"] = photo_types
-    return stable_plan
+
+    # Ultimate safety net: no matter what happened above, never return a plan
+    # with zero exterior views. Force-assign every exterior/unknown photo to a
+    # canonical exterior view so the downstream orchestrator always has
+    # something to assess.
+    final_plan = _ensure_exterior_coverage(stable_plan, photos, photo_types)
+    return final_plan
+
+
+def _ensure_exterior_coverage(
+    plan: Dict[str, Any],
+    photos: List[Dict[str, Any]],
+    photo_types: Dict[str, str],
+) -> Dict[str, Any]:
+    """Guarantee that at least one exterior view exists in the final plan.
+
+    If the plan already has exterior coverage, it is returned unchanged.  If
+    not, every exterior/unknown photo is deterministically mapped to a standard
+    exterior view (front_left/front_right/rear_left/rear_right/left/right) so
+    the pipeline can proceed rather than raising a "no exterior views" error.
+    """
+    view_groups = plan.get("view_groups", {})
+    exterior_views = [v for v, g in view_groups.items() if g and is_exterior_view(v)]
+    if exterior_views:
+        return plan
+
+    # No exterior coverage. Build a deterministic assignment from remaining photos.
+    photo_by_id = {p.get("id", ""): p for p in photos}
+    target_views = ["front_left", "front_right", "rear_left", "rear_right", "left", "right"]
+    assigned_views: List[Dict[str, Any]] = []
+    assigned_groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
+
+    exterior_unknown_photos = [
+        p for p in photos
+        if p.get("id")
+        and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
+    ]
+
+    for idx, photo in enumerate(exterior_unknown_photos):
+        photo_id = photo.get("id", "")
+        view_id = target_views[idx % len(target_views)]
+        assigned_views.append(
+            {
+                "photo_id": photo_id,
+                "view_id": view_id,
+                "confidence": "low",
+                "reason": "planner 最终未产生任何外观视角，强制兜底分配",
+            }
+        )
+        enriched = dict(photo)
+        enriched["_planner_view"] = view_id
+        enriched["_planner_confidence"] = "low"
+        enriched["_planner_reason"] = "planner 最终未产生任何外观视角，强制兜底分配"
+        assigned_groups.setdefault(view_id, []).append(enriched)
+
+    # Preserve any non-exterior groups from the original plan.
+    for view_id in NON_EXTERIOR_VIEWS:
+        assigned_groups[view_id] = list(view_groups.get(view_id, []))
+
+    # Recompute coverage gaps based on the forced groups.
+    coverage_gaps: List[Dict[str, Any]] = []
+    for view_id in get_all_exterior_views():
+        if view_id == "top":
+            continue
+        if not assigned_groups.get(view_id):
+            regions = get_regions_for_view(view_id)
+            coverage_gaps.append(
+                {
+                    "missing_view": view_id,
+                    "display_name": get_display_name(view_id),
+                    "impacted_regions": regions,
+                    "impacted_parts": _impacted_parts_for_missing_view(view_id),
+                    "suggested_action": f"补拍{get_display_name(view_id)}照片",
+                }
+            )
+
+    priority_views = [v for v, g in assigned_groups.items() if g and is_exterior_view(v)]
+    missing_critical_views = [g.get("missing_view") for g in coverage_gaps]
+
+    new_photo_views = assigned_views[:]
+    # Add non-exterior photo views from the original plan.
+    seen_ids = {e["photo_id"] for e in new_photo_views}
+    for entry in plan.get("photo_views", []):
+        photo_id = entry.get("photo_id", "")
+        if photo_id and photo_id not in seen_ids:
+            new_photo_views.append(entry)
+            seen_ids.add(photo_id)
+
+    return {
+        "photo_views": new_photo_views,
+        "view_groups": assigned_groups,
+        "coverage_gaps": coverage_gaps,
+        "workflow_plan": {
+            "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
+            "priority_views": priority_views,
+            "missing_critical_views": missing_critical_views,
+        },
+    }
 
 
 async def _fallback_replan(
@@ -513,6 +747,7 @@ async def _fallback_replan(
     photo_types: Dict[str, str],
 ) -> Dict[str, Any]:
     """Retry view assignment for ambiguous photos when coverage is sparse.
+
 
     Only re-plans photos whose current label is unknown or exterior, leaving
     interior/auxiliary photos untouched.  Uses a stronger prompt focused on
@@ -625,7 +860,6 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
         conf = _CONFIDENCE_ORDER.get(entry.get("_planner_confidence", "low"), 0)
         photo_id = entry.get("id", "")
         # Extract trailing number from filenames like "167111-02.png".
-        import re
         stem = photo_id.split(".")[0]
         match = re.search(r"(\d+)(?=\D*$)", stem)
         idx = int(match.group(1)) if match else 9999

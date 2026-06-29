@@ -95,7 +95,7 @@ def build_image_content(image_url: str, max_width: int = 1024) -> Dict[str, Any]
 
 
 def extract_json(text: str) -> Any:
-    """从模型输出中提取 JSON（支持对象和数组），失败时返回 None"""
+    """从模型输出中提取 JSON（支持对象和数组），失败时返回 None。"""
     if not text or not text.strip():
         return None
 
@@ -105,9 +105,15 @@ def extract_json(text: str) -> Any:
         if text.startswith("json"):
             text = text[4:].strip()
 
-    # 多层清洗尝试
+    # Most LLM output is already valid JSON. Try parsing it directly first so
+    # heuristic cleaners cannot corrupt a perfectly good payload.
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to a sequence of cleaners that try to rescue malformed JSON.
     cleaners = [
-        lambda t: t,
         _fix_unescaped_quotes,
         _fix_chinese_quotes,
         lambda t: _fix_unescaped_quotes(_fix_chinese_quotes(t)),
@@ -124,7 +130,8 @@ def extract_json(text: str) -> Any:
                 return result
             continue
 
-    return None
+    # Last resort: extract any outer JSON object/array from the original text.
+    return _extract_outer_json(text)
 
 
 def _extract_outer_json(text: str) -> Any | None:

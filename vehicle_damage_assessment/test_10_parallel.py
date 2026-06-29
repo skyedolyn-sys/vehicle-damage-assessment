@@ -5,18 +5,18 @@ synthesizer/vision/planner changes) and runs 10 assessments concurrently,
 writing both per-run detailed JSON and a summary JSON/HTML report.
 """
 
-from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List
 
 import asyncio
+import html
 import json
 import os
 import sys
 import time
 import traceback
-from dataclasses import asdict, dataclass, field
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List
 
 sys.path.insert(0, "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment")
 
@@ -40,10 +40,6 @@ class RunResult:
     duration_seconds: float = 0.0
     error: str = ""
     parts: List[Dict[str, Any]] = field(default_factory=list)
-    damaged_part_ids: List[str] = field(default_factory=list)
-    missing_part_ids: List[str] = field(default_factory=list)
-    uncertain_part_ids: List[str] = field(default_factory=list)
-    intact_part_ids: List[str] = field(default_factory=list)
     coverage_summary: Dict[str, Any] = field(default_factory=dict)
     subagent_views: List[str] = field(default_factory=list)
     overall_severity: str = ""
@@ -64,29 +60,22 @@ def _collect_photos() -> List[Dict[str, Any]]:
 
 
 def _extract_part_lists(parts: List[Dict[str, Any]]) -> Dict[str, List[str]]:
-    result = {"damaged": [], "missing": [], "intact": [], "uncertain": []}
+    out = {"damaged": [], "missing": [], "intact": [], "uncertain": []}
     for part in parts:
-        status = part.get("status", "uncertain")
-        part_id = part.get("part_id", "")
-        result.get(status, result["uncertain"]).append(part_id)
-    return result
+        out[part.get("status", "uncertain")].append(part.get("part_id", ""))
+    return out
 
 
-async def run_single(run_id: int, semaphore: asyncio.Semaphore) -> RunResult:
+async def run_single(
+    run_id: int, semaphore: asyncio.Semaphore, photos: List[Dict[str, Any]]
+) -> RunResult:
     result = RunResult(run_id=run_id)
     async with semaphore:
         start = time.perf_counter()
         try:
-            photos = _collect_photos()
             orchestrator_result = await assessment_orchestrator(photos, VEHICLE_INFO)
             parts = orchestrator_result.get("parts", [])
             result.parts = parts
-
-            lists = _extract_part_lists(parts)
-            result.damaged_part_ids = lists["damaged"]
-            result.missing_part_ids = lists["missing"]
-            result.uncertain_part_ids = lists["uncertain"]
-            result.intact_part_ids = lists["intact"]
 
             plan = orchestrator_result.get("plan", {})
             result.coverage_summary = {
@@ -118,9 +107,24 @@ def _write_reports(results: List[RunResult]) -> None:
     summary: Dict[str, Any] = {"timestamp": timestamp, "runs": []}
 
     for result in results:
+        lists = _extract_part_lists(result.parts)
         run_file = OUTPUT_DIR / f"167111_run{result.run_id}_{timestamp}.json"
         with open(run_file, "w", encoding="utf-8") as f:
-            json.dump(asdict(result), f, ensure_ascii=False, indent=2, default=str)
+            json.dump({
+                "run_id": result.run_id,
+                "status": result.status,
+                "duration_seconds": result.duration_seconds,
+                "parts": result.parts,
+                "damaged_part_ids": lists["damaged"],
+                "missing_part_ids": lists["missing"],
+                "uncertain_part_ids": lists["uncertain"],
+                "intact_part_ids": lists["intact"],
+                "coverage_summary": result.coverage_summary,
+                "subagent_views": result.subagent_views,
+                "overall_severity": result.overall_severity,
+                "structural_damage_flag": result.structural_damage_flag,
+                "error": result.error,
+            }, f, ensure_ascii=False, indent=2, default=str)
 
         summary["runs"].append({
             "run_id": result.run_id,
@@ -128,13 +132,13 @@ def _write_reports(results: List[RunResult]) -> None:
             "duration_seconds": result.duration_seconds,
             "overall_severity": result.overall_severity,
             "structural_damage_flag": result.structural_damage_flag,
-            "damaged_count": len(result.damaged_part_ids),
-            "missing_count": len(result.missing_part_ids),
-            "uncertain_count": len(result.uncertain_part_ids),
-            "intact_count": len(result.intact_part_ids),
-            "damaged_parts": result.damaged_part_ids,
-            "missing_parts": result.missing_part_ids,
-            "uncertain_parts": result.uncertain_part_ids,
+            "damaged_count": len(lists["damaged"]),
+            "missing_count": len(lists["missing"]),
+            "uncertain_count": len(lists["uncertain"]),
+            "intact_count": len(lists["intact"]),
+            "damaged_parts": lists["damaged"],
+            "missing_parts": lists["missing"],
+            "uncertain_parts": lists["uncertain"],
             "subagent_views": result.subagent_views,
             "coverage_summary": result.coverage_summary,
             "error": result.error[:500] if result.error else "",
@@ -153,26 +157,26 @@ def _write_reports(results: List[RunResult]) -> None:
 
 
 def _write_html_report(path: Path, summary: Dict[str, Any]) -> None:
-    rows = ""
+    rows = []
     for run in summary["runs"]:
-        rows += f"""
+        rows.append(f"""
         <tr>
           <td>{run['run_id']}</td>
-          <td class="{run['status']}">{run['status']}</td>
+          <td class="{html.escape(run['status'])}">{html.escape(run['status'])}</td>
           <td>{run['duration_seconds']}</td>
-          <td>{run['overall_severity']}</td>
+          <td>{html.escape(run['overall_severity'])}</td>
           <td>{'是' if run['structural_damage_flag'] else '否'}</td>
           <td>{run['damaged_count']}</td>
           <td>{run['missing_count']}</td>
           <td>{run['uncertain_count']}</td>
-          <td>{', '.join(run['subagent_views'])}</td>
-          <td>{', '.join(run['damaged_parts'])}</td>
-          <td>{', '.join(run['uncertain_parts'])}</td>
-          <td style="max-width:300px;white-space:pre-wrap">{run['error']}</td>
+          <td>{html.escape(', '.join(run['subagent_views']))}</td>
+          <td>{html.escape(', '.join(run['damaged_parts']))}</td>
+          <td>{html.escape(', '.join(run['uncertain_parts']))}</td>
+          <td style="max-width:300px;white-space:pre-wrap">{html.escape(run['error'])}</td>
         </tr>
-        """
+        """)
 
-    html = f"""<!DOCTYPE html>
+    html_text = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -204,20 +208,25 @@ def _write_html_report(path: Path, summary: Dict[str, Any]) -> None:
     <th>Uncertain Parts</th>
     <th>Error</th>
   </tr>
-  {rows}
+  {''.join(rows)}
 </table>
 </body>
 </html>"""
     with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(html_text)
+
 
 
 async def main() -> None:
     print(f"Starting {RUN_COUNT} parallel assessments on {FOLDER}")
     print(f"Output directory: {OUTPUT_DIR}")
 
+    photos = _collect_photos()
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
-    tasks = [asyncio.create_task(run_single(i, semaphore), name=f"run_{i}") for i in range(1, RUN_COUNT + 1)]
+    tasks = [
+        asyncio.create_task(run_single(i, semaphore, photos), name=f"run_{i}")
+        for i in range(1, RUN_COUNT + 1)
+    ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     normalized: List[RunResult] = []
@@ -234,10 +243,11 @@ async def main() -> None:
     print(f"{'Run':<6} {'Status':<8} {'Time(s)':<9} {'Severity':<9} {'Structural':<10} {'Damaged':<8} {'Missing':<8} {'Uncertain':<10}")
     print("-" * 100)
     for r in normalized:
+        lists = _extract_part_lists(r.parts)
         print(
             f"{r.run_id:<6} {r.status:<8} {r.duration_seconds:<9} "
             f"{r.overall_severity:<9} {'是' if r.structural_damage_flag else '否':<10} "
-            f"{len(r.damaged_part_ids):<8} {len(r.missing_part_ids):<8} {len(r.uncertain_part_ids):<10}"
+            f"{len(lists['damaged']):<8} {len(lists['missing']):<8} {len(lists['uncertain']):<10}"
         )
     print("=" * 100)
 

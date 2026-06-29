@@ -119,6 +119,18 @@ async def assessment_orchestrator(
         if view_groups.get(view_id)
     ]
 
+    if not views_to_run:
+        priority_views = plan.get("workflow_plan", {}).get("priority_views", [])
+        logger.error(
+            "Planner produced no exterior views (priority_views=%s). "
+            "Refusing to generate an all-uncertain assessment.",
+            priority_views,
+        )
+        raise RuntimeError(
+            f"No exterior views available for assessment (priority_views={priority_views}). "
+            "This usually means the planner failed to parse the photo set."
+        )
+
     subagent_tasks = [asyncio.create_task(run_view_subagent(view_id), name=view_id) for view_id in views_to_run]
     subagent_results = await asyncio.gather(*subagent_tasks, return_exceptions=True)
 

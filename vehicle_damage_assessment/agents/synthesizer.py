@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from config import PARTS_CATALOG, PARTS_BY_ID, PARTS_TOPOLOGY
 from models.topology import VehicleTopology
 
@@ -108,18 +108,10 @@ SPILL_OVER_PRONE_PARTS = {
 
 def _extract_evidence_photos(candidate: Dict[str, Any]) -> List[str]:
     """Extract evidence photo ids from a candidate, handling string or list."""
-    photos: List[str] = []
     raw_photos = candidate.get("evidence_photo", [])
     if isinstance(raw_photos, str):
-        if raw_photos:
-            for ep in raw_photos.split(","):
-                if ep.strip() and ep.strip() not in photos:
-                    photos.append(ep.strip())
-    elif isinstance(raw_photos, list):
-        for ep in raw_photos:
-            if ep and ep not in photos:
-                photos.append(ep)
-    return photos
+        raw_photos = [p.strip() for p in raw_photos.split(",") if p.strip()] if raw_photos else []
+    return list(dict.fromkeys(p for p in raw_photos if p))
 
 
 def _has_photo_coverage_for_part(part_id: str, region_results: List[Dict[str, Any]]) -> bool:
@@ -337,21 +329,14 @@ def _resolve_confidence_roof(
     if not candidates:
         return "low"
 
-    primary = [c for c in candidates if c.get("_region", "") in ROOF_PRIMARY_REGIONS]
+    primary_damaged = [
+        c for c in candidates
+        if c.get("_region", "") in ROOF_PRIMARY_REGIONS and c.get("status") == "damaged"
+    ]
+    if len(primary_damaged) >= 2:
+        return _resolve_confidence(primary_damaged, "damaged")
+
     secondary = [c for c in candidates if c.get("_region", "") in ROOF_SECONDARY_REGIONS]
-
-    if primary:
-        primary_statuses = [c.get("status", "uncertain") for c in primary]
-        if primary_statuses.count("damaged") >= 2:
-            return _resolve_confidence(
-                [c for c in primary if c.get("status") == "damaged"], "damaged"
-            )
-        if "intact" in primary_statuses:
-            return "low"
-        if "damaged" in primary_statuses:
-            return "low"
-        return "low"
-
     if secondary and all(c.get("status") == "damaged" for c in secondary):
         return _resolve_confidence(secondary, "damaged")
     return "low"
@@ -418,8 +403,14 @@ def _resolve_confidence_weighted(
 
 def _downgrade_level(level: str) -> str:
     """Downgrade a damage level by one step."""
-    mapping = {"severe": "moderate", "moderate": "light", "light": "light", "none": "none", "unknown": "unknown"}
-    return mapping.get(level, level)
+    return {"severe": "moderate", "moderate": "light"}.get(level, level)
+
+
+def _append_note(part: Dict[str, Any], note: str) -> None:
+    """Append a note to a part dict, preserving existing notes."""
+    existing = part.get("notes", "")
+    part["notes"] = f"{existing}；{note}" if existing else note
+
 
 
 def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -466,42 +457,43 @@ def _apply_adjacency_rules(
         notes = part.get("notes", "")
         adjacents = topology.get_adjacent(part_id)
 
+        neighbor_status: Dict[str, str] = {
+            adj.part_id: merged_by_id.get(adj.part_id, {}).get("status", "")
+            for adj in adjacents
+        }
+        neighbor_level: Dict[str, str] = {
+            adj.part_id: merged_by_id.get(adj.part_id, {}).get("damage_level", "")
+            for adj in adjacents
+        }
+
         # Rule 1: intact next to damaged/missing -> cap confidence at medium.
         if part.get("status") == "intact":
-            damaged_neighbors = [
-                adj.part_id for adj in adjacents
-                if merged_by_id.get(adj.part_id, {}).get("status") in ("damaged", "missing")
-            ]
+            damaged_neighbors = [pid for pid, status in neighbor_status.items() if status in ("damaged", "missing")]
             if damaged_neighbors and part.get("confidence") == "high":
                 new_part["confidence"] = "medium"
-                note = f"相邻部件存在损伤，降低置信度：{', '.join(damaged_neighbors)}"
-                new_part["notes"] = f"{notes}；{note}" if notes else note
+                _append_note(new_part, f"相邻部件存在损伤，降低置信度：{', '.join(damaged_neighbors)}")
 
         # Rule 2: sunroof level should not be lower than adjacent damaged roof.
         if part_id == "sunroof_glass" and part.get("status") == "damaged":
             for adj in adjacents:
-                if adj.part_id not in ROOF_PARTS:
+                adj_pid = adj.part_id
+                if adj_pid not in ROOF_PARTS or neighbor_status.get(adj_pid) != "damaged":
                     continue
-                adj_part = merged_by_id.get(adj.part_id, {})
-                if adj_part.get("status") == "damaged":
-                    adj_level = adj_part.get("damage_level", "unknown")
-                    current_level = new_part.get("damage_level", "unknown")
-                    if LEVEL_PRIORITY.get(adj_level, 0) > LEVEL_PRIORITY.get(current_level, 0):
-                        new_part["damage_level"] = adj_level
-                        note = f"相邻车顶部件 {adj.part_id} 为 {adj_level}，天窗级别同步上调"
-                        new_part["notes"] = f"{new_part.get('notes', '')}；{note}" if new_part.get("notes") else note
+                adj_level = neighbor_level.get(adj_pid, "unknown")
+                current_level = new_part.get("damage_level", "unknown")
+                if LEVEL_PRIORITY.get(adj_level, 0) > LEVEL_PRIORITY.get(current_level, 0):
+                    new_part["damage_level"] = adj_level
+                    _append_note(new_part, f"相邻车顶部件 {adj_pid} 为 {adj_level}，天窗级别同步上调")
 
         # Rule 3: door next to severely damaged fender/bumper cannot stay intact.
         if part_id.startswith("door_") and part.get("status") == "intact":
             severe_neighbors = [
-                adj.part_id for adj in adjacents
-                if merged_by_id.get(adj.part_id, {}).get("status") == "damaged"
-                and merged_by_id.get(adj.part_id, {}).get("damage_level") == "severe"
+                pid for pid, status in neighbor_status.items()
+                if status == "damaged" and neighbor_level.get(pid) == "severe"
             ]
             if severe_neighbors:
                 new_part["confidence"] = "low"
-                note = f"相邻部件严重受损，降低车门置信度：{', '.join(severe_neighbors)}"
-                new_part["notes"] = f"{new_part.get('notes', '')}；{note}" if new_part.get("notes") else note
+                _append_note(new_part, f"相邻部件严重受损，降低车门置信度：{', '.join(severe_neighbors)}")
 
         # Rule 4: front parts damaged from a single corner view with adjacent
         # severe rear damage are likely spill-over false positives: downgrade.
@@ -511,9 +503,8 @@ def _apply_adjacency_rules(
             and new_part.get("confidence") in ("low", "medium")
         ):
             severe_neighbors = [
-                adj.part_id for adj in adjacents
-                if merged_by_id.get(adj.part_id, {}).get("status") == "damaged"
-                and merged_by_id.get(adj.part_id, {}).get("damage_level") == "severe"
+                pid for pid, status in neighbor_status.items()
+                if status == "damaged" and neighbor_level.get(pid) == "severe"
             ]
             if severe_neighbors:
                 current_level = new_part.get("damage_level", "unknown")
@@ -522,8 +513,10 @@ def _apply_adjacency_rules(
                 if current_level in ("moderate", "light"):
                     new_level = _downgrade_level(current_level)
                     new_part["damage_level"] = new_level
-                    note = f"前部部件从单一/低置信度视角判损，且相邻后部严重受损，疑似误检，级别从 {current_level} 降至 {new_level}"
-                    new_part["notes"] = f"{new_part.get('notes', '')}；{note}" if new_part.get("notes") else note
+                    _append_note(
+                        new_part,
+                        f"前部部件从单一/低置信度视角判损，且相邻后部严重受损，疑似误检，级别从 {current_level} 降至 {new_level}",
+                    )
                 # Also cap confidence to low when the only evidence is low/medium.
                 if new_part.get("confidence") == "medium":
                     new_part["confidence"] = "low"
@@ -542,8 +535,10 @@ def _apply_adjacency_rules(
             primary = set(VIEW_WEIGHTS.get(part_id, {}).get("primary", []))
             if primary and not any(r in primary for r in evidence_regions):
                 new_part["damage_level"] = "moderate"
-                note = f"{part_id} 从非主视角单源判为 severe，易受相邻严重损伤传染，降级为 moderate"
-                new_part["notes"] = f"{new_part.get('notes', '')}；{note}" if new_part.get("notes") else note
+                _append_note(
+                    new_part,
+                    f"{part_id} 从非主视角单源判为 severe，易受相邻严重损伤传染，降级为 moderate",
+                )
 
         updated.append(new_part)
 
@@ -664,25 +659,19 @@ def synthesizer_agent(
             worst_confidence = _resolve_confidence(candidates, best_status, part_id=part_id)
 
         evidence_sources = _build_evidence_sources(candidates)
-        evidence_photos = []
-        for src in evidence_sources:
-            for ep in src.get("evidence_photo", []):
-                if ep and ep not in evidence_photos:
-                    evidence_photos.append(ep)
+        evidence_photos = list(dict.fromkeys(
+            ep for src in evidence_sources for ep in src.get("evidence_photo", []) if ep
+        ))
 
-        damage_types = set()
+        damage_types: Set[str] = set()
         notes_parts = []
         for c in candidates:
             raw_types = c.get("damage_type", [])
             if isinstance(raw_types, str):
                 if raw_types and raw_types != "none":
-                    for dt in raw_types.split(","):
-                        if dt.strip():
-                            damage_types.add(dt.strip())
+                    damage_types.update(dt.strip() for dt in raw_types.split(",") if dt.strip())
             elif isinstance(raw_types, list):
-                for dt in raw_types:
-                    if dt:
-                        damage_types.add(dt)
+                damage_types.update(str(dt) for dt in raw_types if dt)
             note = c.get("notes", "").strip()
             region = c.get("_region", "")
             if note:
@@ -727,7 +716,9 @@ def synthesizer_agent(
     }
 
 
-def _unify_region_units(merged_parts: List[Dict[str, Any]], topology: Optional[VehicleTopology] = None) -> List[Dict[str, Any]]:
+def _unify_region_units(
+    merged_parts: List[Dict[str, Any]], topology: Optional[VehicleTopology] = None
+) -> List[Dict[str, Any]]:
     """Force unified conclusions within physically connected region units.
 
     - rear_unit (tailgate + windshield_rear): use the worst status/level among members,
@@ -736,29 +727,21 @@ def _unify_region_units(merged_parts: List[Dict[str, Any]], topology: Optional[V
     merged_by_id = {p["part_id"]: p for p in merged_parts}
 
     # rear_unit: worst wins, but missing should not override damaged.
-    rear_unit = REGION_UNITS["rear_unit"]
-    rear_members = [merged_by_id[pid] for pid in rear_unit if pid in merged_by_id]
+    rear_members = [merged_by_id[pid] for pid in REGION_UNITS.get("rear_unit", []) if pid in merged_by_id]
     if rear_members:
         statuses = [m["status"] for m in rear_members]
         levels = [m["damage_level"] for m in rear_members]
 
         # If any member is damaged, prefer damaged over missing to avoid the
         # severe rear collision being misclassified as missing parts.
-        if any(s == "damaged" for s in statuses):
-            rear_status = "damaged"
-        else:
-            rear_status = max(statuses, key=lambda s: STATUS_PRIORITY.get(s, 0))
+        rear_status = "damaged" if "damaged" in statuses else max(statuses, key=lambda s: STATUS_PRIORITY.get(s, 0))
+        rear_level = "severe" if "severe" in levels else max(levels, key=lambda lvl: LEVEL_PRIORITY.get(lvl, 0))
 
-        if any(lvl == "severe" for lvl in levels):
-            rear_level = "severe"
-        else:
-            rear_level = max(levels, key=lambda lvl: LEVEL_PRIORITY.get(lvl, 0))
-
+        note = "车尾区域单元统一结论（tailgate + 后挡风玻璃）"
         for m in rear_members:
             m["status"] = rear_status
             m["damage_level"] = rear_level
-            note = "车尾区域单元统一结论（tailgate + 后挡风玻璃）"
-            if not m.get("notes", "").startswith(note):
-                m["notes"] = f"{note}；{m.get('notes', '')}" if m.get("notes") else note
+            existing = m.get("notes", "")
+            m["notes"] = f"{note}；{existing}" if existing and not existing.startswith(note) else note or existing
 
     return list(merged_by_id.values())
