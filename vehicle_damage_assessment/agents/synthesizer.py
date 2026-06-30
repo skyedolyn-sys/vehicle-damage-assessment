@@ -587,6 +587,71 @@ def _apply_adjacency_rules(
                         f"车门损伤证据仅来自斜向视角，且相邻翼子板严重受损（{', '.join(severe_adjacent_fenders)}），判定为相邻损伤的视觉延伸，改为 intact",
                     )
 
+        # Rule 7: rear taillights that are marked intact from a single source but
+        # are surrounded by severe rear-structure damage are likely destroyed or
+        # dislodged.  Single diagonal/rear-corner views often miss the true state
+        # of the lamp housing because it is hidden behind torn metal, debris, or
+        # extreme deformation.
+        if (
+            part_id.startswith("taillight_rear_")
+            and new_part.get("status") == "intact"
+        ):
+            side = part_id.split("_")[-1]
+            allowed = {"bumper_rear", "trunk_lid", "tailgate", f"fender_rear_{side}"}
+            severe_rear_neighbors = [
+                pid for pid, status in neighbor_status.items()
+                if status in ("damaged", "missing")
+                and pid in allowed
+                and neighbor_level.get(pid) == "severe"
+            ]
+            if severe_rear_neighbors:
+                new_part["status"] = "damaged"
+                new_part["damage_level"] = "severe"
+                new_part["damage_type"] = ["missing"]
+                new_part["confidence"] = "low"
+                _append_note(
+                    new_part,
+                    f"尾灯仅从单一斜向/侧向视角判为 intact，但相邻后部结构严重受损（{', '.join(severe_rear_neighbors)}），尾灯不可能独善其身，修正为 damaged severe",
+                )
+
+        # Rule 8: rear fenders and rear doors that remain uncertain/missing from
+        # edge views but are adjacent to severe rear-core damage should be inferred
+        # as damaged.  In a severe rear collision the fender and rear door are
+        # physically connected to the crushed quarter panel; a single intact source
+        # (often from the opposite side or a glance angle) should not override
+        # this inference.
+        if (
+            part_id.startswith(("fender_rear_", "door_rear_"))
+            and new_part.get("status") in ("uncertain", "missing")
+        ):
+            side = part_id.split("_")[-1]
+            allowed = {
+                "bumper_rear", "trunk_lid", "tailgate",
+                f"taillight_rear_{side}", f"fender_rear_{side}",
+            }
+            severe_rear_neighbors = [
+                pid for pid, status in neighbor_status.items()
+                if status in ("damaged", "missing")
+                and pid in allowed
+                and neighbor_level.get(pid) == "severe"
+            ]
+            # Only infer damage if there is no concrete intact evidence from a
+            # primary (side) view.
+            primary_regions = set(VIEW_WEIGHTS.get(part_id, {}).get("primary", []))
+            has_intact_evidence = any(
+                src.get("status") == "intact" and src.get("region", "") in primary_regions
+                for src in new_part.get("evidence_sources", [])
+            )
+            if severe_rear_neighbors and not has_intact_evidence:
+                new_part["status"] = "damaged"
+                new_part["damage_level"] = "severe"
+                new_part["damage_type"] = ["deformation"]
+                new_part["confidence"] = "low"
+                _append_note(
+                    new_part,
+                    f"该部件从边缘视角无法确认，但相邻后部核心结构严重受损（{', '.join(severe_rear_neighbors)}），推断为 damaged severe",
+                )
+
         updated.append(new_part)
 
     return updated
@@ -723,6 +788,10 @@ def synthesizer_agent(
             region = c.get("_region", "")
             if note:
                 notes_parts.append(f"[{region}] {note}")
+
+        # Keep damage_type consistent with the final status.
+        if best_status == "intact":
+            damage_types = set()
 
         merged_parts.append({
             "part_id": part_id,
