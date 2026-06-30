@@ -428,7 +428,31 @@ def _append_note(part: Dict[str, Any], note: str) -> None:
     part["notes"] = f"{existing}；{note}" if existing else note
 
 
+def _set_damaged_severe(part: Dict[str, Any], damage_type: str, note: str) -> None:
+    """Mutate a part dict to a consistent damaged-severe conclusion."""
+    part["status"] = "damaged"
+    part["damage_level"] = "severe"
+    part["damage_type"] = [damage_type]
+    part["confidence"] = "low"
+    _append_note(part, note)
 
+
+def _severe_neighbors(
+    neighbor_status: Dict[str, str],
+    neighbor_level: Dict[str, str],
+    allowed: Set[str],
+) -> List[str]:
+    """Return adjacent part ids that are damaged/missing and severe."""
+    return [
+        pid for pid, status in neighbor_status.items()
+        if status in ("damaged", "missing")
+        and pid in allowed
+        and neighbor_level.get(pid) == "severe"
+    ]
+
+
+# Precomputed frozensets for rear-core inference by side.
+_REAR_CORE_PARTS = frozenset({"bumper_rear", "trunk_lid", "tailgate"})
 def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build traceable evidence sources for each part conclusion."""
     sources: List[Dict[str, Any]] = []
@@ -597,20 +621,12 @@ def _apply_adjacency_rules(
             and new_part.get("status") == "intact"
         ):
             side = part_id.split("_")[-1]
-            allowed = {"bumper_rear", "trunk_lid", "tailgate", f"fender_rear_{side}"}
-            severe_rear_neighbors = [
-                pid for pid, status in neighbor_status.items()
-                if status in ("damaged", "missing")
-                and pid in allowed
-                and neighbor_level.get(pid) == "severe"
-            ]
+            allowed = _REAR_CORE_PARTS | {f"fender_rear_{side}"}
+            severe_rear_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
             if severe_rear_neighbors:
-                new_part["status"] = "damaged"
-                new_part["damage_level"] = "severe"
-                new_part["damage_type"] = ["missing"]
-                new_part["confidence"] = "low"
-                _append_note(
+                _set_damaged_severe(
                     new_part,
+                    "missing",
                     f"尾灯仅从单一斜向/侧向视角判为 intact，但相邻后部结构严重受损（{', '.join(severe_rear_neighbors)}），尾灯不可能独善其身，修正为 damaged severe",
                 )
 
@@ -625,16 +641,13 @@ def _apply_adjacency_rules(
             and new_part.get("status") in ("uncertain", "missing")
         ):
             side = part_id.split("_")[-1]
-            allowed = {
-                "bumper_rear", "trunk_lid", "tailgate",
-                f"taillight_rear_{side}", f"fender_rear_{side}",
-            }
-            severe_rear_neighbors = [
-                pid for pid, status in neighbor_status.items()
-                if status in ("damaged", "missing")
-                and pid in allowed
-                and neighbor_level.get(pid) == "severe"
-            ]
+            allowed = _REAR_CORE_PARTS | {f"taillight_rear_{side}", f"fender_rear_{side}"}
+            # Exclude the part itself (a fender shouldn't validate itself).
+            allowed = allowed - {part_id}
+            severe_rear_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
+            if not severe_rear_neighbors:
+                updated.append(new_part)
+                continue
             # Only infer damage if there is no concrete intact evidence from a
             # primary (side) view.
             primary_regions = set(VIEW_WEIGHTS.get(part_id, {}).get("primary", []))
@@ -642,13 +655,10 @@ def _apply_adjacency_rules(
                 src.get("status") == "intact" and src.get("region", "") in primary_regions
                 for src in new_part.get("evidence_sources", [])
             )
-            if severe_rear_neighbors and not has_intact_evidence:
-                new_part["status"] = "damaged"
-                new_part["damage_level"] = "severe"
-                new_part["damage_type"] = ["deformation"]
-                new_part["confidence"] = "low"
-                _append_note(
+            if not has_intact_evidence:
+                _set_damaged_severe(
                     new_part,
+                    "deformation",
                     f"该部件从边缘视角无法确认，但相邻后部核心结构严重受损（{', '.join(severe_rear_neighbors)}），推断为 damaged severe",
                 )
 
