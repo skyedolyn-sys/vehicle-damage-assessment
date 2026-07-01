@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads and results
+uploads/
+team_parallel_results/
+
+# Logs and debug
+*.log
+debug_*.json
+run_*.py
+
+# Database
+db.sqlite3
+*.sqlite3
+
+# Claude Code
+.claude/
