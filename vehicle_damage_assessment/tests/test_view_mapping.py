@@ -18,15 +18,15 @@ def test_standard_views_include_common_angles():
 
 
 def test_get_regions_for_view_front_left_45():
-    assert get_regions_for_view("front_left_45") == ["front", "left"]
+    assert get_regions_for_view("front_left_45") == ["front", "left", "roof_front"]
 
 
 def test_get_regions_for_view_rear_right_45():
-    assert get_regions_for_view("rear_right_45") == ["rear", "right"]
+    assert get_regions_for_view("rear_right_45") == ["rear", "right", "roof_rear"]
 
 
 def test_get_regions_for_view_top_is_roof():
-    assert get_regions_for_view("top") == ["roof"]
+    assert get_regions_for_view("top") == ["roof", "roof_front", "roof_middle", "roof_rear"]
 
 
 def test_get_regions_for_unknown_returns_empty():

@@ -91,7 +91,7 @@ def test_plan_to_location_map():
     }
     location_map = plan_to_location_map(plan)
     assert location_map["a.png"]["location"] == "front"
-    assert location_map["a.png"]["secondary_locations"] == ["left"]
+    assert location_map["a.png"]["secondary_locations"] == ["left", "roof_front"]
     assert location_map["b.png"]["location"] == "rear"
 
 
@@ -154,4 +154,4 @@ async def test_planner_agent_adds_missing_entries():
             with patch("agents.planner_agent.extract_json", return_value=fake_json):
                 result = await planner_agent(photos, {"vehicle": "test"})
     assert len(result["photo_views"]) == 1
-    assert result["photo_views"][0]["view_id"] == "unknown"
+    assert result["photo_views"][0]["view_id"] == "front_left_45"

@@ -615,7 +615,7 @@ async def planner_agent(
                 and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
             ]
             if remaining_exterior:
-                corner_views = ["front_left", "front_right", "rear_left", "rear_right"]
+                corner_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45"]
                 for idx, photo in enumerate(remaining_exterior):
                     photo_id = photo.get("id", "")
                     assigned_view = corner_views[idx % len(corner_views)]
@@ -641,7 +641,7 @@ async def planner_agent(
             if p.get("id") and p.get("id") not in seen_ids
             and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
         ]
-        target_views = ["front_left", "front_right", "rear_left", "rear_right", "left", "right"]
+        target_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45", "left_90", "right_90"]
         existing_idx = len(target_views)
         for idx, photo in enumerate(remaining_photos):
             photo_id = photo.get("id", "")
@@ -722,7 +722,7 @@ def _ensure_exterior_coverage(
 
     # No exterior coverage. Build a deterministic assignment from remaining photos.
     photo_by_id = {p.get("id", ""): p for p in photos}
-    target_views = ["front_left", "front_right", "rear_left", "rear_right", "left", "right"]
+    target_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45", "left_90", "right_90"]
     assigned_views: List[Dict[str, Any]] = []
     assigned_groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
 
@@ -933,29 +933,29 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
 
     # Rule 2: if a dataset has many corner photos but no pure side (left/right),
     # derive side views from the best corner photos that show that side.
-    if not canonical_groups.get("left"):
+    if not canonical_groups.get("left_90"):
         left_candidates: List[Dict[str, Any]] = []
-        for source_view in ("front_left", "rear_left"):
+        for source_view in ("front_left_45", "rear_left_45"):
             left_candidates.extend(entries_by_view.get(source_view, []))
         if left_candidates:
             left_candidates.sort(key=_rank_key, reverse=True)
             best = dict(left_candidates[0])
-            best["_planner_view"] = "left"
+            best["_planner_view"] = "left_90"
             best["_planner_confidence"] = "medium"
             best["_planner_reason"] = "从左前/左后视角推导出左侧覆盖"
-            canonical_groups["left"] = [best]
+            canonical_groups["left_90"] = [best]
 
-    if not canonical_groups.get("right"):
+    if not canonical_groups.get("right_90"):
         right_candidates: List[Dict[str, Any]] = []
-        for source_view in ("front_right", "rear_right"):
+        for source_view in ("front_right_45", "rear_right_45"):
             right_candidates.extend(entries_by_view.get(source_view, []))
         if right_candidates:
             right_candidates.sort(key=_rank_key, reverse=True)
             best = dict(right_candidates[0])
-            best["_planner_view"] = "right"
+            best["_planner_view"] = "right_90"
             best["_planner_confidence"] = "medium"
             best["_planner_reason"] = "从右前/右后视角推导出右侧覆盖"
-            canonical_groups["right"] = [best]
+            canonical_groups["right_90"] = [best]
 
     # Preserve non-exterior groups exactly.
     for view_id in NON_EXTERIOR_VIEWS:
