@@ -1,0 +1,27 @@
+# Numeric thresholds shared across agents.  Values are intentionally kept as
+# legacy-compatible numbers in Phase 1.
+default:
+  # Vision subagent: visibility thresholds
+  visibility_definite_ratio: 0.30
+  visibility_invisible_ratio: 0.10
+
+  # Vision subagent: damage size thresholds (meters)
+  damage_light_max_diameter: 0.05
+  damage_moderate_max_diameter: 0.20
+
+  # Planner: photo-type classification
+  wide_shot_body_ratio: 0.60
+  close_up_area_cm: 30
+
+  # Planner: LLM classification cap for ambiguous photos
+  planner_llm_classification_cap: 12
+
+  # Planner: fallback thresholds
+  fill_fallback_min_exterior_views: 6
+  fill_fallback_remaining_ratio: 0.25
+  fill_fallback_min_remaining: 2
+
+  # Synthesizer: agreement ratio for trusting multi-source damage claims
+  synthesizer_agreement_ratio: 0.75
+
+by_vehicle_type: {}

@@ -1,0 +1,35 @@
+# Trigger sets consumed by adjacency/spill-over logic in the synthesizer.
+# The rule logic itself remains in agents/synthesizer.py in Phase 1; only the
+# part lists move to config for versioning and validation.
+default:
+  front_false_damage_parts:
+    - bumper_front
+    - door_front_left
+    - door_front_right
+    - fender_front_left
+    - fender_front_right
+    - headlight_front_left
+    - headlight_front_right
+
+  spill_over_prone_parts:
+    - door_front_left
+    - door_front_right
+    - door_rear_left
+    - door_rear_right
+    - fender_rear_right
+    - taillight_rear_right
+
+  rear_core_parts:
+    - trunk_lid
+    - tailgate
+    - bumper_rear
+    - taillight_rear_left
+    - taillight_rear_right
+    - windshield_rear
+
+  rear_core_structural_parts:
+    - trunk_lid
+    - tailgate
+    - bumper_rear
+
+by_vehicle_type: {}

@@ -45,7 +45,7 @@ class TestIntegrationBuildAndCompare:
         assert topo.vehicle_id == "v-int-001"
         assert topo.vehicle_name == "Integration Test Sedan"
         assert len(topo.nodes) == 27
-        assert len(topo.regions) == 5
+        assert len(topo.regions) == 8
 
     def test_compare_output_has_required_keys(self, sample_vehicle_info, sample_vehicle_prior):
         """The DamageAssessment result contains all required top-level keys."""

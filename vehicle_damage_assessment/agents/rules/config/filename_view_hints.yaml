@@ -1,0 +1,42 @@
+# Filename-based view hints used by the planner as deterministic fallbacks.
+# Rules are evaluated in priority order (higher first); ties use list order.
+rules:
+  - pattern: 行驶证
+    view_id: auxiliary
+    priority: 100
+  - pattern: vin
+    view_id: auxiliary
+    priority: 100
+  - pattern: 铭牌
+    view_id: auxiliary
+    priority: 100
+  - pattern: 证件
+    view_id: auxiliary
+    priority: 100
+  - pattern: 车牌
+    view_id: auxiliary
+    priority: 100
+  - pattern: 内饰
+    view_id: interior
+    priority: 90
+  - pattern: 车内
+    view_id: interior
+    priority: 90
+  - pattern: 座椅
+    view_id: interior
+    priority: 90
+  - pattern: "-01."
+    view_id: auxiliary
+    priority: 80
+  - pattern: "-09."
+    view_id: auxiliary
+    priority: 80
+  - pattern: "-07."
+    view_id: interior
+    priority: 80
+  - pattern: "-08."
+    view_id: interior
+    priority: 80
+  - pattern: "-11."
+    view_id: interior
+    priority: 80

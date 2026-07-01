@@ -1,0 +1,56 @@
+# Filename-based heuristics used by the planner as deterministic fallbacks.
+# Rules are evaluated in priority order (higher first).  Patterns are matched
+# case-insensitively against the filename stem.
+rules:
+  - name: auxiliary_license
+    patterns:
+      - 行驶证
+      - 证件
+      - vin
+      - 铭牌
+      - license
+      - plate
+      - 证
+      - 车牌
+      - 车架号
+      - 登记证书
+      - 保单
+      - 发票
+    priority: 100
+
+  - name: interior
+    patterns:
+      - 车内
+      - 内饰
+      - 驾驶舱
+      - 座椅
+      - 方向盘
+      - 仪表盘
+      - 中控
+      - 后排
+    priority: 90
+
+  - name: auxiliary_01
+    patterns:
+      - "-01."
+    priority: 80
+
+  - name: auxiliary_09
+    patterns:
+      - "-09."
+    priority: 80
+
+  - name: interior_07
+    patterns:
+      - "-07."
+    priority: 80
+
+  - name: interior_08
+    patterns:
+      - "-08."
+    priority: 80
+
+  - name: interior_11
+    patterns:
+      - "-11."
+    priority: 80

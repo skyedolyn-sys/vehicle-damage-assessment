@@ -14,7 +14,7 @@ from models.topology import VehicleTopology
 
 @pytest.fixture
 def base_topology():
-    """Return a full 27-part VehicleTopology built from dummy inputs."""
+    """Return a full 33-part VehicleTopology built from dummy inputs."""
     vehicle_info = {"vehicle_id": "v-001", "vehicle_name": "Test Sedan"}
     vehicle_prior = {
         "topology": {
@@ -66,20 +66,20 @@ class TestCompareAllIntact:
         assert result.structural_damage_flag is False
         assert result.structural_patterns == []
         assert result.overall_severity == "none"
-        assert len(result.intact_parts) == 27
+        assert len(result.intact_parts) == 33
         assert result.damaged_parts == []
         assert result.missing_parts == []
 
     def test_all_intact_summary_counts(self, base_topology):
-        """Summary counts reflect 27 intact, 0 damaged/missing/uncertain."""
+        """Summary counts reflect 33 intact, 0 damaged/missing/uncertain."""
         states = [
             _make_state(node.node_id, node.region, node.side, Status.INTACT, DamageLevel.NONE)
             for node in base_topology.nodes.values()
         ]
         result = compare_topology(base_topology, states)
 
-        assert result.summary["total_parts"] == 27
-        assert result.summary["intact_count"] == 27
+        assert result.summary["total_parts"] == 33
+        assert result.summary["intact_count"] == 33
         assert result.summary["damaged_count"] == 0
         assert result.summary["missing_count"] == 0
         assert result.summary["uncertain_count"] == 0
@@ -105,7 +105,7 @@ class TestCompareOneDamaged:
         states = [_make_state("hood", "front", "center", Status.DAMAGED, DamageLevel.MODERATE)]
         result = compare_topology(base_topology, states)
 
-        assert result.summary["uncertain_count"] == 26
+        assert result.summary["uncertain_count"] == 32
         expected_uncertain = [nid for nid in base_topology.nodes if nid != "hood"]
         assert sorted(result.uncertain_parts) == sorted(expected_uncertain)
 
@@ -342,7 +342,7 @@ class TestMissingVsUncertain:
         """A topology node with no corresponding actual state is synthesised as UNCERTAIN."""
         states = []
         result = compare_topology(base_topology, states)
-        assert len(result.uncertain_parts) == 27
+        assert len(result.uncertain_parts) == 33
         # Verify all parts in the result have UNCERTAIN status
         for part in result.parts:
             assert part.status == Status.UNCERTAIN

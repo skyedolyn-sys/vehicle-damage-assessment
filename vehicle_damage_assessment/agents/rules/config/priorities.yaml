@@ -1,0 +1,30 @@
+# Priority rankings used by the synthesizer to resolve conflicts across
+# evidence sources.  Higher numbers mean higher priority (more severe / more
+# conservative).  These map directly to the legacy STATUS_PRIORITY,
+# UNCERTAIN_STATUS_PRIORITY, LEVEL_PRIORITY, and CONFIDENCE_PRIORITY dicts.
+default:
+  status:
+    damaged: 3
+    uncertain: 2
+    intact: 1
+    missing: 4
+
+  uncertain_status:
+    missing: 4
+    damaged: 3
+    intact: 1
+    uncertain: 0
+
+  level:
+    severe: 4
+    moderate: 3
+    light: 2
+    none: 1
+    unknown: 0
+
+  confidence:
+    low: 0
+    medium: 1
+    high: 2
+
+by_vehicle_type: {}

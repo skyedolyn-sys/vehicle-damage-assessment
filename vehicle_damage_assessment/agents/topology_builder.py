@@ -119,8 +119,6 @@ def build_vehicle_topology(
         "roof_front": ["roof_front", "sunroof_glass"],
         "roof_middle": ["roof_middle", "sunroof_glass", "roof_rack"],
         "roof_rear": ["roof_rear"],
-        "roof_left": ["roof_front", "roof_middle", "sunroof_glass"],
-        "roof_right": ["roof_front", "roof_middle", "sunroof_glass"],
     }
 
     for part in PARTS_CATALOG:

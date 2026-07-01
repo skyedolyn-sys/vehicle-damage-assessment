@@ -277,6 +277,7 @@ _CHECKLIST_HINTS: List[tuple[str, str]] = [
     ("taillight_", "灯具本体可见即可评估；若灯壳完整、无裂纹/破损/进水痕迹则标 intact；若尾灯区域被严重遮挡、仅残留边缘、灯壳不可辨识或周围钣金严重撕裂变形，应优先标 damaged severe 或 missing，不要仅因'未见裂纹'就判 intact；远端仅见灯壳边缘且无明显异常时可标 uncertain"),
     ("mirror_", "后视镜：只要镜壳外侧任何部分可见，且该可见部分无裂纹/破损/变形/脱落，即标 intact（confidence=low），并在 notes 中说明可见程度；只有当后视镜完全不可见，或可见部分存在明确损伤时，才标 damaged/uncertain"),
     ("door_", "严格区分门板主体与相邻翼子板/C柱/轮拱：仅评估车门面板本身（含门把手、腰线、窗下沿以下板面）。若凹陷/变形实际位于翼子板、C柱或后翼子板轮拱区域，即使靠近车门边缘，也不要判为车门损伤；车门板主体无异常则标 intact；门板主体明确可见凹陷/划痕/变形/漆面脱落才标 damaged；仅看到车门边缘/窗框/门缝时请标 uncertain"),
+    ("pillar_", "立柱属于结构性安全件：只要画面中能看到该立柱且存在变形、断裂、褶皱、撕裂、钣金错位等任何结构异常，即标 damaged severe；立柱轻微刮擦可标 light；完全看不到该立柱时才标 uncertain。特别注意：左前45度/右前45度视角必须明确评估A柱，左侧/右侧正视角必须明确评估B柱，左后45度/右后45度视角必须明确评估C柱，不要遗漏"),
     ("fender_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
     ("bumper_", "主体面板可见即可评估；无凹陷/划痕/变形/漆面脱落则标 intact；有损伤时按凹陷/划痕/变形面积选择 damage_level（light/moderate/severe）"),
     ("windshield", "玻璃区域可见即可评估；无裂纹/碎裂则标 intact"),

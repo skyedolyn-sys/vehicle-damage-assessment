@@ -3,107 +3,57 @@ from typing import List, Dict, Any, Optional, Set
 from config import PARTS_CATALOG, PARTS_BY_ID, PARTS_TOPOLOGY
 from models.topology import VehicleTopology
 
+from agents.rules import (
+    load_part_profile,
+    load_priority_map,
+    load_region_units,
+    load_view_weights,
+)
 
-STATUS_PRIORITY = {"damaged": 3, "uncertain": 2, "intact": 1, "missing": 4}
-LEVEL_PRIORITY = {"severe": 4, "moderate": 3, "light": 2, "none": 1, "unknown": 0}
-CONFIDENCE_PRIORITY = {"low": 0, "medium": 1, "high": 2}
 
-# When a source is uncertain, prefer a non-uncertain status from another
-# source that covers the same part.  This implements the "adjacent view
-# fallback" without extra LLM calls.
-UNCERTAIN_STATUS_PRIORITY = {"missing": 4, "damaged": 3, "intact": 1, "uncertain": 0}
+_PRIORITIES = load_priority_map()
+STATUS_PRIORITY = _PRIORITIES["status"]
+LEVEL_PRIORITY = _PRIORITIES["level"]
+CONFIDENCE_PRIORITY = _PRIORITIES["confidence"]
+UNCERTAIN_STATUS_PRIORITY = _PRIORITIES["uncertain_status"]
 
 # Parts that are frequently only partially visible from a single view and
 # therefore need conservative handling in the synthesizer.
-CONSERVATIVE_PARTS = {
-    "door_front_left", "door_rear_left",
-    "door_front_right", "door_rear_right",
-    "mirror_left", "mirror_right",
-    "roof_middle", "roof_rear", "sunroof_glass",
-}
+CONSERVATIVE_PARTS = load_part_profile("conservative")
 
-ROOF_PARTS = {"roof_front", "roof_middle", "roof_rear", "sunroof_glass", "roof_rack"}
+ROOF_PARTS = load_part_profile("roof")
 
 # Region units: groups of parts that should share a unified conclusion.
 # - rear_unit: tailgate and rear windshield are physically one damaged area.
-REGION_UNITS = {
-    "rear_unit": {"tailgate", "windshield_rear"},
-}
+REGION_UNITS = load_region_units()
+
+_VIEW_WEIGHTS_CONFIG = load_view_weights()
 
 # Best canonical view for observing each conservative part.  Damage reports
 # from non-primary views are downgraded because they may only show an edge.
-PRIMARY_VIEW = {
-    "door_front_left": ["left"],
-    "door_rear_left": ["left"],
-    "door_front_right": ["right"],
-    "door_rear_right": ["right"],
-    "mirror_left": ["left"],
-    "mirror_right": ["right"],
-    "roof_middle": ["front", "rear"],  # side views are acceptable but not ideal
-    "roof_rear": ["rear"],
-    "sunroof_glass": [],  # side views are poor for the sunroof
-}
+PRIMARY_VIEW = _VIEW_WEIGHTS_CONFIG["primary_view"]
 
 # View-based conflict resolution weights for conservative parts.
 # "primary" views have the best vantage point for the part and override secondary
 # edge/glance views.  "secondary" views may see only an edge and are downgraded
 # unless multiple secondary sources agree.
-VIEW_WEIGHTS: Dict[str, Dict[str, Any]] = {
-    "door_front_left": {
-        "primary": {"left"},
-        "secondary": {"front_left", "rear_left"},
-    },
-    "door_rear_left": {
-        "primary": {"left"},
-        "secondary": {"front_left", "rear_left"},
-    },
-    "door_front_right": {
-        "primary": {"right"},
-        "secondary": {"front_right", "rear_right"},
-    },
-    "door_rear_right": {
-        "primary": {"right"},
-        "secondary": {"front_right", "rear_right"},
-    },
-    "mirror_left": {
-        "primary": {"left"},
-        "secondary": {"front_left", "rear_left"},
-    },
-    "mirror_right": {
-        "primary": {"right"},
-        "secondary": {"front_right", "rear_right"},
-    },
-}
+VIEW_WEIGHTS = _VIEW_WEIGHTS_CONFIG["view_weights"]
 
 # Roof parts are handled separately because they are easily confused with rear
-# structure damage from side views.  A symmetric roof should only be trusted as
-# damaged when multiple non-rear views agree.
-ROOF_PRIMARY_REGIONS = {"left", "right", "front_left", "front_right"}
-ROOF_SECONDARY_REGIONS = {"rear", "rear_left", "rear_right"}
+# structure damage from side views.  The canonical top-down view is the most
+# authoritative source for roof damage; side/corner views only show edges and
+# are treated as secondary evidence.
+ROOF_PRIMARY_REGIONS = _VIEW_WEIGHTS_CONFIG["roof_primary_regions"]
+ROOF_SECONDARY_REGIONS = _VIEW_WEIGHTS_CONFIG["roof_secondary_regions"]
 
 # Front parts that are frequently misclassified as damaged from single
 # corner/side views due to occlusion, shadows, or spill-over from adjacent
 # severe rear damage.
-FRONT_FALSE_DAMAGE_PARTS = {
-    "bumper_front",
-    "door_front_left",
-    "door_front_right",
-    "fender_front_left",
-    "fender_front_right",
-    "headlight_front_left",
-    "headlight_front_right",
-}
+FRONT_FALSE_DAMAGE_PARTS = load_part_profile("front_false_damage")
 
 # Parts whose damage level should be capped when only a single secondary view
 # reports damage and there is adjacent severe damage that may cause spill-over.
-SPILL_OVER_PRONE_PARTS = {
-    "door_front_left",
-    "door_front_right",
-    "door_rear_left",
-    "door_rear_right",
-    "fender_rear_right",
-    "taillight_rear_right",
-}
+SPILL_OVER_PRONE_PARTS = load_part_profile("spill_over_prone")
 
 
 def _extract_evidence_photos(candidate: Dict[str, Any]) -> List[str]:
@@ -662,6 +612,107 @@ def _apply_adjacency_rules(
                     f"该部件从边缘视角无法确认，但相邻后部核心结构严重受损（{', '.join(severe_rear_neighbors)}），推断为 damaged severe",
                 )
 
+        # Rule 9: Pillar-to-roof/structural propagation.
+        # Pillars are structural safety components. If a pillar is uncertain or
+        # missing and any adjacent structural part (same-side roof, windshield,
+        # or neighboring pillar) is damaged severe, the pillar is likely damaged
+        # too due to structural continuity.
+        if (
+            part_id.startswith("pillar_")
+            and new_part.get("status") in ("uncertain", "missing")
+        ):
+            side = part_id.split("_")[-1]
+            allowed = {
+                "roof_front",
+                "roof_middle",
+                "roof_rear",
+                "windshield_front",
+                "windshield_rear",
+                f"pillar_a_{side}",
+                f"pillar_b_{side}",
+                f"pillar_c_{side}",
+            }
+            allowed = allowed - {part_id}
+            severe_structural_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
+            if severe_structural_neighbors:
+                primary_regions = set(VIEW_WEIGHTS.get(part_id, {}).get("primary", []))
+                has_intact_evidence = any(
+                    src.get("status") == "intact" and src.get("region", "") in primary_regions
+                    for src in new_part.get("evidence_sources", [])
+                )
+                if not has_intact_evidence:
+                    _set_damaged_severe(
+                        new_part,
+                        "deformation",
+                        f"推断：相邻结构件严重损伤（{', '.join(severe_structural_neighbors)}），立柱同步受损",
+                    )
+
+        # Rule 10: Roof-front edge propagation.
+        # If roof_front is intact or uncertain, and a front corner view reports
+        # severe damage to the windshield_front or same-side pillar_a, and there
+        # is no top-view intact evidence that clearly refutes it, infer roof_front
+        # as damaged severe. Front collisions often crumple the roof-front edge
+        # where the A-pillars meet the roof rail.
+        if (
+            part_id == "roof_front"
+            and new_part.get("status") in ("intact", "uncertain")
+        ):
+            severe_front_structural = []
+            for side in ("left", "right"):
+                pillar_id = f"pillar_a_{side}"
+                if (
+                    neighbor_status.get(pillar_id) in ("damaged", "missing")
+                    and neighbor_level.get(pillar_id) == "severe"
+                ):
+                    severe_front_structural.append(pillar_id)
+            if (
+                neighbor_status.get("windshield_front") in ("damaged", "missing")
+                and neighbor_level.get("windshield_front") == "severe"
+            ):
+                severe_front_structural.append("windshield_front")
+
+            if severe_front_structural:
+                has_top_intact = any(
+                    src.get("status") == "intact" and src.get("region", "") == "top"
+                    for src in new_part.get("evidence_sources", [])
+                )
+                if not has_top_intact:
+                    _set_damaged_severe(
+                        new_part,
+                        "deformation",
+                        f"前部结构件严重受损（{', '.join(severe_front_structural)}），推断车顶前缘同步受损",
+                    )
+
+        # Rule 11: Roof-middle/rear propagation.
+        # If roof_middle or roof_rear is uncertain and adjacent roof/pillar parts
+        # are damaged severe, infer damaged severe. This handles cases where side
+        # views show roof rail deformation but the top view is missing or unclear.
+        if (
+            part_id in ("roof_middle", "roof_rear")
+            and new_part.get("status") == "uncertain"
+        ):
+            if part_id == "roof_middle":
+                allowed = {"roof_front", "roof_rear", "sunroof_glass", "roof_rack"}
+            else:
+                allowed = {"roof_middle", "windshield_rear", "trunk_lid", "tailgate"}
+            for side in ("left", "right"):
+                allowed.add(f"pillar_b_{side}")
+                if part_id == "roof_rear":
+                    allowed.add(f"pillar_c_{side}")
+
+            severe_roof_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
+            if severe_roof_neighbors:
+                has_top_intact = any(
+                    src.get("status") == "intact" and src.get("region", "") == "top"
+                    for src in new_part.get("evidence_sources", [])
+                )
+                if not has_top_intact:
+                    _set_damaged_severe(
+                        new_part,
+                        "deformation",
+                        f"相邻车顶/立柱结构严重受损（{', '.join(severe_roof_neighbors)}），推断该部位同步受损",
+                    )
+
         updated.append(new_part)
 
     return updated
@@ -767,14 +818,14 @@ def synthesizer_agent(
             })
             continue
 
-        if part_id in VIEW_WEIGHTS:
-            best_status = _resolve_status_weighted(candidates, part_id)
-            best_level = _resolve_damage_level_weighted(candidates, best_status, part_id)
-            worst_confidence = _resolve_confidence_weighted(candidates, best_status, part_id)
-        elif part_id in ROOF_PARTS:
+        if part_id in ROOF_PARTS:
             best_status = _resolve_status_roof(candidates)
             best_level = _resolve_damage_level_roof(candidates, best_status)
             worst_confidence = _resolve_confidence_roof(candidates, best_status)
+        elif part_id in VIEW_WEIGHTS:
+            best_status = _resolve_status_weighted(candidates, part_id)
+            best_level = _resolve_damage_level_weighted(candidates, best_status, part_id)
+            worst_confidence = _resolve_confidence_weighted(candidates, best_status, part_id)
         else:
             best_status = _resolve_status(candidates)
             best_level = _resolve_damage_level(candidates, best_status, part_id=part_id)

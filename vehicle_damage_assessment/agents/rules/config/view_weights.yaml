@@ -1,0 +1,160 @@
+# View authority weights for synthesizer conflict resolution.
+# Each part declares its primary (canonical) and secondary (edge/glance) views.
+# In Phase 1 this data is centralized; the consuming logic remains in
+# agents/synthesizer.py.
+default:
+  primary_view:
+    door_front_left:
+      - left_90
+    door_rear_left:
+      - left_90
+    door_front_right:
+      - right_90
+    door_rear_right:
+      - right_90
+    mirror_left:
+      - left_90
+    mirror_right:
+      - right_90
+    roof_front:
+      - top
+    roof_middle:
+      - top
+    roof_rear:
+      - rear
+    sunroof_glass:
+      - top
+    pillar_a_left:
+      - front_left_45
+    pillar_a_right:
+      - front_right_45
+    pillar_b_left:
+      - left_90
+    pillar_b_right:
+      - right_90
+    pillar_c_left:
+      - rear_left_45
+    pillar_c_right:
+      - rear_right_45
+
+  view_weights:
+    door_front_left:
+      primary:
+        - left_90
+      secondary:
+        - front_left_45
+        - rear_left_45
+    door_rear_left:
+      primary:
+        - left_90
+      secondary:
+        - front_left_45
+        - rear_left_45
+    door_front_right:
+      primary:
+        - right_90
+      secondary:
+        - front_right_45
+        - rear_right_45
+    door_rear_right:
+      primary:
+        - right_90
+      secondary:
+        - front_right_45
+        - rear_right_45
+    mirror_left:
+      primary:
+        - left_90
+      secondary:
+        - front_left_45
+        - rear_left_45
+    mirror_right:
+      primary:
+        - right_90
+      secondary:
+        - front_right_45
+        - rear_right_45
+    roof_front:
+      primary:
+        - top
+      secondary:
+        - front
+        - front_left_45
+        - front_right_45
+    roof_middle:
+      primary:
+        - top
+      secondary:
+        - left_90
+        - right_90
+    roof_rear:
+      primary:
+        - top
+      secondary:
+        - rear
+        - rear_left_45
+        - rear_right_45
+    sunroof_glass:
+      primary:
+        - top
+      secondary:
+        - front
+        - front_left_45
+        - front_right_45
+        - rear
+        - rear_left_45
+        - rear_right_45
+        - left_90
+        - right_90
+    pillar_a_left:
+      primary:
+        - front_left_45
+      secondary:
+        - left_90
+        - top
+    pillar_a_right:
+      primary:
+        - front_right_45
+      secondary:
+        - right_90
+        - top
+    pillar_b_left:
+      primary:
+        - left_90
+      secondary:
+        - front_left_45
+        - rear_left_45
+        - top
+    pillar_b_right:
+      primary:
+        - right_90
+      secondary:
+        - front_right_45
+        - rear_right_45
+        - top
+    pillar_c_left:
+      primary:
+        - rear_left_45
+      secondary:
+        - left_90
+        - top
+    pillar_c_right:
+      primary:
+        - rear_right_45
+      secondary:
+        - right_90
+        - top
+
+  roof_primary_regions:
+    - top
+
+  roof_secondary_regions:
+    - left_90
+    - right_90
+    - front_left_45
+    - front_right_45
+    - rear
+    - rear_left_45
+    - rear_right_45
+
+by_vehicle_type: {}

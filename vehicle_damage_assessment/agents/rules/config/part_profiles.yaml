@@ -1,0 +1,59 @@
+# Part profiles group parts by structural role or behavioral characteristics.
+# These sets are consumed by the synthesizer and other agents instead of
+# hardcoding part ids in multiple places.
+default:
+  conservative:
+    # Parts frequently only partially visible from a single view.
+    - door_front_left
+    - door_rear_left
+    - door_front_right
+    - door_rear_right
+    - mirror_left
+    - mirror_right
+    - roof_middle
+    - roof_rear
+    - sunroof_glass
+
+  roof:
+    - roof_front
+    - roof_middle
+    - roof_rear
+    - sunroof_glass
+    - roof_rack
+
+  front_false_damage:
+    # Front parts often misclassified as damaged from single corner/side views.
+    - bumper_front
+    - door_front_left
+    - door_front_right
+    - fender_front_left
+    - fender_front_right
+    - headlight_front_left
+    - headlight_front_right
+
+  spill_over_prone:
+    # Parts whose severe claims should be capped when only a secondary view
+    # reports damage and adjacent parts are severely damaged.
+    - door_front_left
+    - door_front_right
+    - door_rear_left
+    - door_rear_right
+    - fender_rear_right
+    - taillight_rear_right
+
+  rear_core:
+    # Rear structure parts used for inference of surrounding damage.
+    - trunk_lid
+    - tailgate
+    - bumper_rear
+    - taillight_rear_left
+    - taillight_rear_right
+    - windshield_rear
+
+  rear_core_structural:
+    # Subset used by adjacency inference for severe rear collisions.
+    - trunk_lid
+    - tailgate
+    - bumper_rear
+
+by_vehicle_type: {}

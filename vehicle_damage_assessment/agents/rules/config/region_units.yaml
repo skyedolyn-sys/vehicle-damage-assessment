@@ -1,0 +1,8 @@
+# Region units: physically connected groups of parts that should share a
+# unified conclusion in the synthesizer.
+default:
+  rear_unit:
+    - tailgate
+    - windshield_rear
+
+by_vehicle_type: {}

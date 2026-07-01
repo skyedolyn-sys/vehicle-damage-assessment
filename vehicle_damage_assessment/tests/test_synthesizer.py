@@ -372,7 +372,7 @@ class TestSynthesizerViewWeights:
         """A primary side view saying intact should override rear-diagonal damage spill-over."""
         region_results = [
             {
-                "region": "left",
+                "region": "left_90",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -387,7 +387,7 @@ class TestSynthesizerViewWeights:
                 "uncertain_items": [],
             },
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -411,7 +411,7 @@ class TestSynthesizerViewWeights:
         """A primary side view saying damaged should be preserved."""
         region_results = [
             {
-                "region": "left",
+                "region": "left_90",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -426,7 +426,7 @@ class TestSynthesizerViewWeights:
                 "uncertain_items": [],
             },
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -450,7 +450,7 @@ class TestSynthesizerViewWeights:
         """Damage reported only from secondary edge views is downgraded one level."""
         region_results = [
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -475,7 +475,7 @@ class TestSynthesizerViewWeights:
         """Without primary coverage, multiple secondary agreeing sources keep severe."""
         region_results = [
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -490,7 +490,7 @@ class TestSynthesizerViewWeights:
                 "uncertain_items": [],
             },
             {
-                "region": "front_left",
+                "region": "front_left_45",
                 "parts": [
                     {
                         "part_id": "door_rear_left",
@@ -517,7 +517,7 @@ class TestSynthesizerRoofRules:
     def test_sunroof_single_primary_damaged_not_severe(self):
         region_results = [
             {
-                "region": "left",
+                "region": "top",
                 "parts": [
                     {
                         "part_id": "sunroof_glass",
@@ -540,7 +540,7 @@ class TestSynthesizerRoofRules:
     def test_sunroof_secondary_only_uncertain(self):
         region_results = [
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "sunroof_glass",
@@ -562,7 +562,7 @@ class TestSynthesizerRoofRules:
     def test_roof_rear_from_secondary_only_capped(self):
         region_results = [
             {
-                "region": "rear_left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "roof_rear",
@@ -582,10 +582,11 @@ class TestSynthesizerRoofRules:
         assert part["status"] == "damaged"
         assert part["damage_level"] == "moderate"
 
-    def test_roof_multiple_primary_damaged_trusted(self):
+    def test_roof_multiple_secondary_damaged_capped(self):
+        """Multiple secondary views agreeing on roof damage should be capped to light."""
         region_results = [
             {
-                "region": "left",
+                "region": "left_90",
                 "parts": [
                     {
                         "part_id": "roof_middle",
@@ -600,7 +601,7 @@ class TestSynthesizerRoofRules:
                 "uncertain_items": [],
             },
             {
-                "region": "right",
+                "region": "right_90",
                 "parts": [
                     {
                         "part_id": "roof_middle",
@@ -618,7 +619,7 @@ class TestSynthesizerRoofRules:
         result = synthesizer_agent(region_results)
         part = next(p for p in result["parts"] if p["part_id"] == "roof_middle")
         assert part["status"] == "damaged"
-        assert part["damage_level"] == "moderate"
+        assert part["damage_level"] == "light"
 
 
 class TestSynthesizerMirrorRules:
@@ -628,7 +629,7 @@ class TestSynthesizerMirrorRules:
         """No damage evidence for a mirror -> prefer intact over uncertain."""
         region_results = [
             {
-                "region": "left",
+                "region": "left_90",
                 "parts": [
                     {
                         "part_id": "mirror_left",
@@ -651,7 +652,7 @@ class TestSynthesizerMirrorRules:
     def test_mirror_primary_intact_overrides_secondary_damage(self):
         region_results = [
             {
-                "region": "left",
+                "region": "left_90",
                 "parts": [
                     {
                         "part_id": "mirror_left",
@@ -666,7 +667,7 @@ class TestSynthesizerMirrorRules:
                 "uncertain_items": [],
             },
             {
-                "region": "front_left",
+                "region": "front_left_45",
                 "parts": [
                     {
                         "part_id": "mirror_left",

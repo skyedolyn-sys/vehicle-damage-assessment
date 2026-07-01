@@ -74,6 +74,18 @@ async def call_minimax(
                     content = data["choices"][0]["message"]["content"]
                     cleaned = clean_minimax_output(content)
                     logger.info("[minimax:%s] attempt=%d success elapsed=%.2fs raw_len=%d cleaned_len=%d", call_id, attempt, elapsed, len(content), len(cleaned))
+                    # Diagnostic: if cleaning stripped usable JSON, dump samples for inspection.
+                    if cleaned and not extract_json(cleaned):
+                        diagnostic_path = os.path.expanduser(f"~/minimax_diagnostic_{call_id}.txt")
+                        try:
+                            with open(diagnostic_path, "w", encoding="utf-8") as f:
+                                f.write("===== RAW =====\n")
+                                f.write(content)
+                                f.write("\n===== CLEANED =====\n")
+                                f.write(cleaned)
+                            logger.warning("[minimax:%s] cleaned content not parseable as JSON; diagnostic written to %s", call_id, diagnostic_path)
+                        except Exception as dump_exc:
+                            logger.warning("[minimax:%s] failed to write diagnostic: %s", call_id, dump_exc)
                     return cleaned
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError, RuntimeError) as e:
             elapsed = time.perf_counter() - start

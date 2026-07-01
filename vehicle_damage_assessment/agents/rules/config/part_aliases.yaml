@@ -1,0 +1,144 @@
+# Canonical part id aliases used by the vision subagent to normalize free-form
+# LLM output.  Each entry maps a canonical part_id to a list of synonyms.
+aliases:
+  bumper_front:
+    synonyms:
+      - front_bumper
+      - front_bumber
+  hood:
+    synonyms:
+      - front_hood
+      - engine_hood
+  grille_front:
+    synonyms:
+      - front_grille
+      - grille
+  headlight_front_left:
+    synonyms:
+      - left_front_headlight
+      - left_headlight
+      - headlight_left
+      - front_left_headlight
+  headlight_front_right:
+    synonyms:
+      - right_front_headlight
+      - right_headlight
+      - headlight_right
+      - front_right_headlight
+  fender_front_left:
+    synonyms:
+      - left_front_fender
+      - left_fender_front
+      - left_fender
+  fender_front_right:
+    synonyms:
+      - right_front_fender
+      - right_fender_front
+      - right_fender
+  windshield_front:
+    synonyms:
+      - front_windshield
+  bumper_rear:
+    synonyms:
+      - rear_bumper
+  trunk_lid:
+    synonyms:
+      - trunk
+  tailgate:
+    synonyms:
+      - tailgate
+  taillight_rear_left:
+    synonyms:
+      - left_rear_taillight
+      - left_rear_tail_light
+      - left_taillight
+      - left_tail_light
+      - taillight_left
+      - tail_light_left
+      - left_rear_light
+      - left_tail_light_rear
+  taillight_rear_right:
+    synonyms:
+      - right_rear_taillight
+      - right_rear_tail_light
+      - right_taillight
+      - right_tail_light
+      - taillight_right
+      - tail_light_right
+      - right_rear_light
+      - right_tail_light_rear
+  windshield_rear:
+    synonyms:
+      - rear_windshield
+      - back_windshield
+  door_front_left:
+    synonyms:
+      - left_front_door
+      - door_front_left
+  door_rear_left:
+    synonyms:
+      - left_rear_door
+      - left_back_door
+  door_front_right:
+    synonyms:
+      - right_front_door
+  door_rear_right:
+    synonyms:
+      - right_rear_door
+      - right_back_door
+  mirror_left:
+    synonyms:
+      - left_side_mirror
+      - left_mirror
+      - left_rearview_mirror
+  mirror_right:
+    synonyms:
+      - right_side_mirror
+      - right_mirror
+      - right_rearview_mirror
+  fender_rear_left:
+    synonyms:
+      - left_rear_fender
+      - left_rear_quarter_panel
+      - left_quarter_panel
+      - left_quarter
+  fender_rear_right:
+    synonyms:
+      - right_rear_fender
+      - right_rear_quarter_panel
+      - right_quarter_panel
+      - right_quarter
+  pillar_a_left:
+    synonyms:
+      - left_a_pillar
+      - a_pillar_left
+  pillar_a_right:
+    synonyms:
+      - right_a_pillar
+      - a_pillar_right
+  pillar_b_left:
+    synonyms:
+      - left_b_pillar
+      - b_pillar_left
+  pillar_b_right:
+    synonyms:
+      - right_b_pillar
+      - b_pillar_right
+  pillar_c_left:
+    synonyms:
+      - left_c_pillar
+      - c_pillar_left
+  pillar_c_right:
+    synonyms:
+      - right_c_pillar
+      - c_pillar_right
+  roof_front:
+    synonyms: []
+  roof_middle:
+    synonyms: []
+  roof_rear:
+    synonyms: []
+  sunroof_glass:
+    synonyms: []
+  roof_rack:
+    synonyms: []
