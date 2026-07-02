@@ -18,6 +18,7 @@ import re
 from typing import Any, Dict, List, Tuple
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
+from agents.rules import render_prompt_template
 from agents.view_mapping import get_display_name, get_regions_for_view, ROOF_SUB_REGION_TO_PARTS
 from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 from models import PartActualState, Status, DamageLevel
@@ -139,81 +140,15 @@ def _normalize_part_id(raw_id: str) -> str:
 
 
 
-_SYSTEM_PROMPT_TEMPLATE = """你是车辆外部损伤识别专家。本次任务只针对 **{view_display_name}** 视角下的照片进行识别。
-
-## 必须检查的部件清单（checklist）
-以下部件属于本次视角的覆盖范围，必须逐项给出结论，禁止省略：
-{checklist_text}
-
-## 其他可见异常描述
-除了 checklist 内的标准部件外，如果照片中还出现以下情况，请在 additional_findings 中客观描述：
-- 不属于标准清单的额外损伤或异常（例如大面积凹陷、玻璃碎裂、液体泄漏、轮胎异常、标识缺失等）
-- 无法对应到具体部件但整体可见的损伤区域
-- 拍摄质量问题导致无法判断某些区域的说明
-
-车型信息：{vehicle_name}
-
-输出 JSON 格式：
-{{
-  "view_id": "{view_id}",
-  "view_display_name": "{view_display_name}",
-  "parts": [
-    {{
-      "part_id": "hood",
-      "part_name": "引擎盖",
-      "region": "front",
-      "side": "center",
-      "status": "intact|damaged|missing|uncertain",
-      "damage_level": "none|light|moderate|severe|unknown",
-      "damage_type": ["scratch", "dent", "crack", "tear", "deformation", "missing", "other"],
-      "standard_exists": true,
-      "actual_visible": true,
-      "actual_present": true,
-      "confidence": "high|medium|low",
-      "evidence_photo": ["167111-02.png"],
-      "notes": "补充说明"
-    }}
-  ],
-  "uncertain_items": [
-    {{
-      "item": "左前翼子板完整性",
-      "reason": "视角遮挡",
-      "suggested_action": "补拍..."
-    }}
-  ],
-  "additional_findings": [
-    {{
-      "description": "保险杠下方有轻微刮擦，不在标准部件清单中",
-      "location_hint": "前保险杠下沿",
-      "severity": "light",
-      "evidence_photo": ["167111-02.png"]
-    }}
-  ]
-}}
-
-判定规则：
-1. **必须逐项输出 checklist 中的每一个部件，禁止省略任何部件。**
-2. 可见性判定（按优先级）：
-   - 完全可见或主要部分可见（占比 >= 30% 或可见关键轮廓）：给出明确结论，优先标 intact 或 damaged。
-   - 远端部件在透视中占比小但无变形/划痕/裂纹等异常：可判定 intact，confidence=low，notes 中说明"远端可见，无明显变形"。
-   - 后视镜等突出部件被部分遮挡但可见部分完整且无裂纹/变形：优先标 intact，confidence=low，notes 中说明"可见部分完整，未见损伤"。
-   - 完全不可见（占比 < 10% 或被严重遮挡）：status=uncertain，damage_level=unknown，confidence=low。
-   - 局部可见但无法确认完整状态：可标 uncertain，但如仅边缘可见且无异常，优先尝试标 intact 并说明"局部可见，未见异常"。
-3. 车顶区域部件（roof_front, roof_middle, roof_rear, sunroof_glass, roof_rack）在带俯角的视角中只要能看到相应车顶边缘，也必须输出结论；只要车顶边缘可见且未看到凹陷、变形、裂纹、玻璃碎裂等明显异常，优先标 intact；只有当确实看到上述异常时才标 damaged；完全看不到车顶才标 uncertain。
-4. status 为 damaged 时，damage_level 不能是 none。
-5. status 为 intact 时，damage_level 必须是 none，damage_type 为空或 ["none"]。
-6. status 为 missing 时，damage_level 必须是 severe，damage_type 必须包含 "missing"，actual_present=false。
-7. status 为 uncertain 时，说明该部件属于 checklist 但照片无法看清；完全不在 checklist 中的部件如果要描述，请放到 additional_findings，不要输出在 parts 中。
-8. 同视角多张照片冲突时，取最保守结论（损伤程度往高报，置信度往低调）。
-9. 不要把泥点、水渍、阴影、反光、拍摄畸变误判为损伤。
-10. evidence_photo 必须使用本次输入照片的真实编号；如果多张照片都看到同一部件，列出所有相关照片编号。
-11. additional_findings 只描述客观可见事实，不要推断原因或给出维修建议。
-12. damage_level 量化标准（针对 damaged 状态）：
-    - light：轻微划痕、小面积漆面损伤、浅凹陷直径 < 5cm、无结构变形。
-    - moderate：明显凹陷/变形 5-20cm、裂纹但未断裂、局部漆面脱落、可修复钣金损伤。
-    - severe：大面积变形 > 20cm、断裂/撕裂、部件脱落或缺失、需要更换的损伤。
-13. 只输出 JSON，不要额外文字。
-"""
+def _build_system_prompt(view_id: str, view_display_name: str, checklist_text: str, vehicle_name: str) -> str:
+    """Render the vision subagent system prompt from the rules package template."""
+    return render_prompt_template(
+        "vision_system_prompt",
+        view_id=view_id,
+        view_display_name=view_display_name,
+        checklist_text=checklist_text,
+        vehicle_name=vehicle_name,
+    )
 
 
 def _build_covered_regions_text(view_id: str, topology: Any) -> str:
@@ -333,6 +268,7 @@ def _make_uncertain_part(
                 evidence_photos=list(photo_ids),
                 notes="checklist 要求评估该部件，子 agent 未明确输出；同视角其他部件均 intact，按可见性推断为 intact",
                 adjacent_status={},
+                photo_type="unknown",
             )
 
     return PartActualState(
@@ -350,6 +286,7 @@ def _make_uncertain_part(
         evidence_photos=list(photo_ids),
         notes="checklist 要求评估该部件，但子 agent 输出中未包含，自动标记为 uncertain",
         adjacent_status={},
+        photo_type="unknown",
     )
 
 
@@ -362,7 +299,21 @@ def _parse_string_or_list(raw: Any, sep: str = ",") -> List[str]:
     return [str(x) for x in raw if x]
 
 
-def _llm_dict_to_part_actual_state(data: Dict[str, Any], region: str) -> PartActualState:
+def _resolve_photo_type(evidence_photos: List[str], photo_type_lookup: Dict[str, str]) -> str:
+    """Map evidence photo ids to a single representative photo_type.
+
+    Priority: wide_shot > close_up_damage > close_up_detail > unknown.
+    """
+    types = {photo_type_lookup.get(pid, "unknown") for pid in evidence_photos}
+    for preferred in ("wide_shot", "close_up_damage", "close_up_detail"):
+        if preferred in types:
+            return preferred
+    return "unknown"
+
+
+def _llm_dict_to_part_actual_state(
+    data: Dict[str, Any], region: str, photo_type: str = "unknown"
+) -> PartActualState:
     """Convert an LLM dict to PartActualState."""
     status_str = data.get("status", "uncertain")
     damage_level_str = data.get("damage_level", "unknown")
@@ -386,6 +337,15 @@ def _llm_dict_to_part_actual_state(data: Dict[str, Any], region: str) -> PartAct
     actual_visible = data.get("actual_visible", len(evidence_photos) > 0)
     actual_present = data.get("actual_present", status != Status.MISSING)
 
+    evidence_source = {
+        "region": region,
+        "status": status.value,
+        "damage_level": damage_level.value,
+        "confidence": data.get("confidence", "low"),
+        "evidence_photo": evidence_photos,
+        "notes": data.get("notes", ""),
+    }
+
     return PartActualState(
         part_id=data.get("part_id", ""),
         part_name=data.get("part_name", ""),
@@ -401,6 +361,8 @@ def _llm_dict_to_part_actual_state(data: Dict[str, Any], region: str) -> PartAct
         evidence_photos=evidence_photos,
         notes=data.get("notes", ""),
         adjacent_status={},
+        photo_type=photo_type,
+        evidence_sources=[evidence_source],
     )
 
 
@@ -442,7 +404,7 @@ async def vision_subagent(
     checklist = _build_checklist(view_id, topology)
     checklist_text = _build_checklist_text(checklist, view_id)
 
-    system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
+    system_prompt = _build_system_prompt(
         view_id=view_id,
         view_display_name=view_display_name,
         checklist_text=checklist_text,
@@ -453,6 +415,12 @@ async def vision_subagent(
         {"type": "text", "text": system_prompt},
         {"type": "text", "text": f"以下是 {len(photos)} 张{view_display_name}照片，请联合分析："},
     ]
+
+    photo_type_lookup: Dict[str, str] = {}
+    for photo in photos:
+        photo_id = photo.get("id", "")
+        if photo_id:
+            photo_type_lookup[photo_id] = photo.get("_planner_photo_type", "unknown")
 
     for photo in photos:
         content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
@@ -491,7 +459,14 @@ async def vision_subagent(
                 part_dict.setdefault("region", node.region)
                 part_dict.setdefault("side", node.side)
 
-        state = _llm_dict_to_part_actual_state(part_dict, part_dict.get("region", ""))
+        evidence_photos = _parse_string_or_list(part_dict.get("evidence_photo", part_dict.get("evidence_photos", [])))
+
+        photo_type = _resolve_photo_type(evidence_photos, photo_type_lookup)
+        part_dict["photo_type"] = photo_type
+
+        state = _llm_dict_to_part_actual_state(
+            part_dict, part_dict.get("region", ""), photo_type=photo_type
+        )
         part_actual_states.append(state)
         parts.append(state.to_legacy_dict())
 

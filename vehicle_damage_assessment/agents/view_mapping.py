@@ -161,6 +161,15 @@ def get_view_selection_prompt() -> str:
     return "\n".join(lines)
 
 
+def canonicalize_view_id(raw: str) -> str:
+    """Return the canonical standard view id for any view alias/short name.
+
+    This is a stricter alias of ``normalize_view_id`` intended for internal
+    code that only needs the canonical id and never wants ``unknown``.
+    """
+    return _normalize_view_id(raw)
+
+
 def normalize_view_id(raw: str) -> str:
     """Normalise a free-form view string to a canonical view id.
 

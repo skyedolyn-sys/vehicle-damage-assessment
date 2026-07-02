@@ -21,6 +21,7 @@ import os
 import re
 
 from agents.minimax_client import call_minimax, extract_json, build_image_content
+from agents.rules import render_prompt_template
 
 logger = logging.getLogger(__name__)
 # Also mirror planner logs to a dedicated file so Django's console log level
@@ -106,59 +107,16 @@ def _view_hint_from_filename(filename: str) -> str:
             return view_id
     return ""
 
-_SYSTEM_PROMPT = f"""你是车辆照片视角规划专家。你的任务是一次性查看用户上传的所有车辆照片，为每张照片指定一个标准视角标签，并指出哪些外观视角缺失、需要补拍。
+_VALID_PHOTO_TYPES = {"wide_shot", "close_up_damage", "close_up_detail", "unknown"}
 
-{{view_selection_prompt}}
 
-输出必须是 JSON，格式如下（**必须严格使用以下字段名，不要使用其他字段名**）：
-{{
-  "photo_views": [
-    {{"photo_id": "167111-02.png", "view_id": "front_left", "confidence": "high", "reason": "车头朝画面右侧，车身向左侧延伸，左前大灯和左前翼子板完整可见"}},
-    {{"photo_id": "167111-03.png", "view_id": "front_right", "confidence": "high", "reason": "车头朝画面左侧，车身向右侧延伸，右前大灯和右前翼子板完整可见"}},
-    {{"photo_id": "167111-05.png", "view_id": "rear_left", "confidence": "high", "reason": "车尾朝画面右侧，车身向左侧延伸，左后尾灯和左后翼子板完整可见"}},
-    {{"photo_id": "167111-10.png", "view_id": "rear_right", "confidence": "high", "reason": "车尾朝画面左侧，车身向右侧延伸，右后尾灯和右后翼子板完整可见"}},
-    {{"photo_id": "167111-07.png", "view_id": "interior", "confidence": "high", "reason": "车内后排座椅，不参与外观识别"}},
-    {{"photo_id": "167111-09.png", "view_id": "auxiliary", "confidence": "high", "reason": "VIN码/铭牌，用于提取车辆信息"}}
-  ],
-  "coverage_gaps": [
-    {{
-      "missing_view": "right",
-      "display_name": "右侧正侧",
-      "impacted_regions": ["right"],
-      "impacted_parts": ["右前门", "右后门", "右后视镜", "右后翼子板"],
-      "suggested_action": "补拍车辆右侧正侧面照片"
-    }}
-  ],
-  "workflow_plan": {{
-    "summary": "已覆盖车头左侧、车头右侧、车尾左侧、车尾右侧；缺少右侧正侧和车顶",
-    "priority_views": ["front_left", "front_right", "rear_left", "rear_right"],
-    "missing_critical_views": ["right"]
-  }}
-}}
-
-判定规则：
-1. 每张照片必须指定一个 view_id，且必须是上述标准视角之一。
-2. 左右判断以中国大陆左舵车辆为准：
-   - 驾驶员侧 = 车辆左侧
-   - 副驾驶侧 = 车辆右侧
-3. **车头/车尾正前/正后判定必须严格：只有车头/车尾完全正对镜头、左右对称时才使用 front/rear；只要有左右偏移，必须使用 front_left/front_right/rear_left/rear_right。**
-4. 车头视角判定（选择最严格的一项）：
-   - 若画面中能看到更多驾驶员侧车身（左侧前大灯/翼子板/车门更大更完整） → front_left
-   - 若画面中能看到更多副驾驶侧车身（右侧前大灯/翼子板/车门更大更完整） → front_right
-   - 只有左右前大灯大小基本对称、车头完全居中时才使用 front
-   - **不要因为有"车头"就把带角度的照片判为 front；front 只用于纯正面。**
-5. 车尾视角判定：
-   - 若画面中能看到更多驾驶员侧车身（左侧尾灯/翼子板/车门更大更完整） → rear_left
-   - 若画面中能看到更多副驾驶侧车身（右侧尾灯/翼子板/车门更大更完整） → rear_right
-   - 只有左右尾灯大小基本对称、车尾完全居中时才使用 rear
-6. 车辆左侧应显示车辆完整驾驶员侧：左前门、左后门、左后视镜、左前/后翼子板完整可见，车头车尾只露少量边缘。
-7. 车辆右侧应显示车辆完整副驾驶侧：右前门、右后门、右后视镜、右前/后翼子板完整可见，车头车尾只露少量边缘。
-8. 只有外观视角（front/front_left/front_right/rear/rear_left/rear_right/left/right）参与外观损伤识别；interior、auxiliary、unknown 照片不纳入 coverage_gaps 的外观缺失判断。
-9. 证件/VIN/铭牌/行驶证等标记为 auxiliary；车内照片标记为 interior；无法判断时标记为 unknown。
-10. confidence 取 high/medium/low，low 表示视角判断不确定。
-11. **必须严格使用字段名 photo_views、photo_id、view_id、confidence、reason、coverage_gaps、missing_view、workflow_plan。禁止输出 analysis、summary、missing_views 等其他字段名。**
-12. 只输出 JSON，不要额外文字。
-"""
+def _build_system_prompt(vehicle_name: str) -> str:
+    """Render the planner system prompt from the rules package template."""
+    return render_prompt_template(
+        "planner_system_prompt",
+        view_selection_prompt=get_view_selection_prompt(),
+        vehicle_name=vehicle_name,
+    )
 
 
 def _build_image_content(photo: Dict[str, Any], max_width: int = _PLANNER_THUMB_WIDTH) -> Dict[str, Any]:
@@ -168,7 +126,7 @@ def _build_image_content(photo: Dict[str, Any], max_width: int = _PLANNER_THUMB_
 
 
 def _clean_view_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Normalise planner output entries to valid canonical view ids."""
+    """Normalise planner output entries to valid canonical view ids and photo types."""
     cleaned = []
     for entry in entries:
         if not isinstance(entry, dict):
@@ -176,10 +134,13 @@ def _clean_view_entries(entries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         photo_id = entry.get("photo_id", "")
         raw_view = entry.get("view_id", "unknown")
         view_id = normalize_view_id(raw_view)
+        raw_photo_type = entry.get("photo_type", "unknown")
+        photo_type = raw_photo_type if raw_photo_type in _VALID_PHOTO_TYPES else "unknown"
         cleaned.append(
             {
                 "photo_id": photo_id,
                 "view_id": view_id,
+                "photo_type": photo_type,
                 "confidence": entry.get("confidence", "low"),
                 "reason": entry.get("reason", ""),
             }
@@ -351,6 +312,7 @@ def _stabilize_plan(
         enriched["_planner_view"] = view_id
         enriched["_planner_confidence"] = entry.get("confidence", "low")
         enriched["_planner_reason"] = entry.get("reason", "")
+        enriched["_planner_photo_type"] = entry.get("photo_type", "unknown")
         groups.setdefault(view_id, []).append(enriched)
 
     for view_id, photo_list in groups.items():
@@ -421,6 +383,7 @@ def _adapt_legacy_analysis(result: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 "photo_id": photo_id,
                 "view_id": view_id,
+                "photo_type": "unknown",
                 "confidence": "high" if view_id not in ("unknown", "") else "low",
                 "reason": reason,
             }
@@ -445,6 +408,7 @@ def _group_photos_by_view(
         enriched["_planner_view"] = view_id
         enriched["_planner_confidence"] = entry.get("confidence", "low")
         enriched["_planner_reason"] = entry.get("reason", "")
+        enriched["_planner_photo_type"] = entry.get("photo_type", "unknown")
         groups.setdefault(view_id, []).append(enriched)
 
     return groups
@@ -486,8 +450,7 @@ async def planner_agent(
     vehicle_name = vehicle_prior.get("vehicle", "该车")
     view_selection_prompt = get_view_selection_prompt()
 
-    system_prompt = _SYSTEM_PROMPT.replace("{{view_selection_prompt}}", view_selection_prompt)
-    system_prompt = system_prompt.replace("{{vehicle_name}}", vehicle_name)
+    system_prompt = _build_system_prompt(vehicle_name)
 
     content: List[Dict[str, Any]] = [
         {"type": "text", "text": system_prompt},
@@ -712,7 +675,7 @@ def _ensure_exterior_coverage(
 
     If the plan already has exterior coverage, it is returned unchanged.  If
     not, every exterior/unknown photo is deterministically mapped to a standard
-    exterior view (front_left/front_right/rear_left/rear_right/left/right) so
+    exterior view (front_left_45/front_right_45/rear_left_45/rear_right_45/left_90/right_90) so
     the pipeline can proceed rather than raising a "no exterior views" error.
     """
     view_groups = plan.get("view_groups", {})
@@ -825,18 +788,18 @@ async def _fallback_replan(
 输出必须是 JSON，格式如下：
 {{
   "photo_views": [
-    {{"photo_id": "167111-02.png", "view_id": "front_left", "confidence": "high", "reason": "车头朝画面右侧，车身向左侧延伸，左前大灯和左前翼子板完整可见"}}
+    {{"photo_id": "167111-02.png", "view_id": "front_left_45", "confidence": "high", "reason": "车头朝画面右侧，车身向左侧延伸，左前大灯和左前翼子板完整可见"}}
   ]
 }}
 
 判定规则（重点关注左右侧判断）：
-1. 车头左侧（front_left）：车头朝画面右侧，车身向左侧延伸。
-2. 车头右侧（front_right）：车头朝画面左侧，车身向右侧延伸。
-3. 车尾左侧（rear_left）：车尾朝画面右侧，车身向左侧延伸。
-4. 车尾右侧（rear_right）：车尾朝画面左侧，车身向右侧延伸。
-5. 车辆左侧（left）：车辆左侧面完整可见，左前/后门、左后视镜、左前/后翼子板为主要内容。
-6. 车辆右侧（right）：车辆右侧面完整可见，右前/后门、右后视镜、右前/后翼子板为主要内容。
-7. 只要车身某一侧面完整或占画面主体，优先标 left 或 right。
+1. 车头左侧（front_left_45）：车头朝画面右侧，车身向左侧延伸。
+2. 车头右侧（front_right_45）：车头朝画面左侧，车身向右侧延伸。
+3. 车尾左侧（rear_left_45）：车尾朝画面右侧，车身向左侧延伸。
+4. 车尾右侧（rear_right_45）：车尾朝画面左侧，车身向右侧延伸。
+5. 车辆左侧（left_90）：车辆左侧面完整可见，左前/后门、左后视镜、左前/后翼子板为主要内容。
+6. 车辆右侧（right_90）：车辆右侧面完整可见，右前/后门、右后视镜、右前/后翼子板为主要内容。
+7. 只要车身某一侧面完整或占画面主体，优先标 left_90 或 right_90。
 8. 只输出 JSON，不要额外文字。
 """
 
@@ -897,7 +860,7 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
       exterior view for stable downstream subagent dispatch.
 
     This reduces 12-photo "车顶闸" style datasets to a predictable 6-view
-    coverage: front_left, front_right, rear_left, rear_right, left, right.
+    coverage: front_left_45, front_right_45, rear_left_45, rear_right_45, left_90, right_90.
     """
     photo_by_id = {p.get("id", ""): p for p in photos}
     view_groups = plan.get("view_groups", {})

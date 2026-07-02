@@ -82,7 +82,7 @@ _LEGACY_VIEW_WEIGHTS: Dict[str, Dict[str, Any]] = {
         "mirror_right": ["right_90"],
         "roof_front": ["top"],
         "roof_middle": ["top"],
-        "roof_rear": ["rear"],
+        "roof_rear": ["top"],
         "sunroof_glass": ["top"],
         "pillar_a_left": ["front_left_45"],
         "pillar_a_right": ["front_right_45"],

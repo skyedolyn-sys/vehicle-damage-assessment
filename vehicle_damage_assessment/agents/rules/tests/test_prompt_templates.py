@@ -44,7 +44,7 @@ def test_vision_system_prompt_renders():
 
 
 def test_planner_system_prompt_matches_legacy():
-    from agents.planner_agent import _SYSTEM_PROMPT
+    from agents.planner_agent import _build_system_prompt
 
     rendered = render_prompt_template(
         "planner_system_prompt",
@@ -59,7 +59,7 @@ def test_planner_system_prompt_matches_legacy():
 
 
 def test_vision_system_prompt_matches_legacy():
-    from agents.vision_subagent import _SYSTEM_PROMPT_TEMPLATE
+    from agents.vision_subagent import _build_system_prompt
 
     rendered = render_prompt_template(
         "vision_system_prompt",

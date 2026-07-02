@@ -2,6 +2,7 @@ import json
 from typing import List, Dict, Any, Optional
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
+from agents.view_mapping import canonicalize_view_id
 from config import PARTS_CATALOG, PARTS_BY_ID
 from models import VehicleTopology, PartActualState, Status, DamageLevel
 
@@ -18,7 +19,7 @@ LOCATION_TO_PARTS = {
     "内饰": [],
 }
 
-# 中文位置描述到视角标识的映射
+# 中文位置描述到视角标识的映射（输出标准视角 ID）
 LOCATION_DETAIL_TO_VIEW = {
     "车头": "front",
     "正面": "front",
@@ -26,32 +27,30 @@ LOCATION_DETAIL_TO_VIEW = {
     "车尾": "rear",
     "后面": "rear",
     "后": "rear",
-    "左侧": "left",
-    "左": "left",
-    "右侧": "right",
-    "右": "right",
-    "车顶": "roof",
-    "顶部": "roof",
-    "车头左侧": "front_left",
-    "左前": "front_left",
-    "车头左前": "front_left",
-    "车头右侧": "front_right",
-    "右前": "front_right",
-    "车头右前": "front_right",
-    "车尾左侧": "rear_left",
-    "左后": "rear_left",
-    "车尾左后": "rear_left",
-    "车尾右侧": "rear_right",
-    "右后": "rear_right",
-    "车尾右后": "rear_right",
+    "左侧": "left_90",
+    "左": "left_90",
+    "右侧": "right_90",
+    "右": "right_90",
+    "车顶": "top",
+    "顶部": "top",
+    "车头左侧": "front_left_45",
+    "左前": "front_left_45",
+    "车头左前": "front_left_45",
+    "车头右侧": "front_right_45",
+    "右前": "front_right_45",
+    "车头右前": "front_right_45",
+    "车尾左侧": "rear_left_45",
+    "左后": "rear_left_45",
+    "车尾左后": "rear_left_45",
+    "车尾右侧": "rear_right_45",
+    "右后": "rear_right_45",
+    "车尾右后": "rear_right_45",
     "车头正前": "front",
     "车尾正后": "rear",
-    "左侧": "left",
-    "左侧正侧": "left",
-    "左侧面": "left",
-    "右侧": "right",
-    "右侧正侧": "right",
-    "右侧面": "right",
+    "左侧正侧": "left_90",
+    "左侧面": "left_90",
+    "右侧正侧": "right_90",
+    "右侧面": "right_90",
 }
 
 # 位置到区域标识的映射
@@ -122,7 +121,9 @@ def map_photos_to_topology_nodes(
             node = topology.get_node(nid)
             if node is None:
                 continue
-            if view in node.visibility_from or region in node.visibility_from:
+            canonical_view = canonicalize_view_id(view)
+            node_views = {canonicalize_view_id(v) for v in node.visibility_from}
+            if canonical_view in node_views or region in node.visibility_from:
                 coverage[nid].append(photo_id)
 
     return coverage

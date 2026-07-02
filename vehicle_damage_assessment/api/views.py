@@ -374,11 +374,7 @@ async def _run_orchestrator_workflow(
                 "message": "正在校验输出并生成最终报告...",
             },
         )
-        merged = {
-            "parts": orchestrator_result.get("parts", []),
-            "uncertain_items": orchestrator_result.get("uncertain_items", []),
-        }
-        final_result = validate_and_enrich(merged, topology)
+        final_result = dict(orchestrator_result)
         final_result["vehicle_info"] = vehicle_info
         final_result["plan"] = plan
         final_result["review"] = review

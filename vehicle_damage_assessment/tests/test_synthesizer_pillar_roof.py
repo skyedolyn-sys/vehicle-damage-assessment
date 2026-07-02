@@ -1,8 +1,14 @@
-"""Tests for cross-view pillar/roof propagation rules (Rules 9-11)."""
+"""Tests for cross-view pillar/roof propagation rules (Rules 9-11).
+
+Rules 9-11 were moved from the synthesizer to TopologyConsistencyEnforcer in
+Phase 3.  These tests exercise the full pipeline: synthesizer merges per-view
+evidence, then TopologyComparator applies the topology-driven structural rules.
+"""
 
 import pytest
 from agents.synthesizer import synthesizer_agent
-from models.topology import VehicleTopology, TopologyNode
+from agents.topology_comparator import compare_topology
+from models.topology import TopologyNode, VehicleTopology
 
 
 def _build_full_topology():
@@ -76,6 +82,13 @@ def _build_full_topology():
     )
 
 
+def _run_pipeline(region_results, topology):
+    """Run synthesizer then topology comparison and return legacy parts list."""
+    synth = synthesizer_agent(region_results, topology=topology)
+    assessment = compare_topology(topology, synth["part_actual_states"])
+    return assessment.to_legacy_result()["parts"]
+
+
 class TestRule9PillarPropagation:
     """Rule 9: Pillars should be inferred damaged when adjacent structural parts are severe."""
 
@@ -114,8 +127,8 @@ class TestRule9PillarPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        pillar = next(p for p in result["parts"] if p["part_id"] == "pillar_a_left")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_a_left"]
         assert pillar["status"] == "damaged"
         assert pillar["damage_level"] == "severe"
         assert "推断" in pillar["notes"]
@@ -155,8 +168,8 @@ class TestRule9PillarPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        pillar = next(p for p in result["parts"] if p["part_id"] == "pillar_b_left")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_b_left"]
         assert pillar["status"] == "damaged"
         assert pillar["damage_level"] == "severe"
 
@@ -189,8 +202,8 @@ class TestRule9PillarPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        pillar = next(p for p in result["parts"] if p["part_id"] == "pillar_c_right")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_c_right"]
         assert pillar["status"] == "damaged"
         assert pillar["damage_level"] == "severe"
 
@@ -229,8 +242,8 @@ class TestRule9PillarPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        pillar = next(p for p in result["parts"] if p["part_id"] == "pillar_a_left")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_a_left"]
         assert pillar["status"] == "intact"
 
     def test_pillar_no_severe_neighbor_unchanged(self):
@@ -253,8 +266,8 @@ class TestRule9PillarPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        pillar = next(p for p in result["parts"] if p["part_id"] == "pillar_b_left")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_b_left"]
         assert pillar["status"] == "uncertain"
 
 
@@ -296,8 +309,8 @@ class TestRule10RoofFrontPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_front")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_front"]
         assert roof["status"] == "damaged"
         assert roof["damage_level"] == "severe"
         assert "前部结构件" in roof["notes"]
@@ -337,8 +350,8 @@ class TestRule10RoofFrontPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_front")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_front"]
         # Top view intact should override the propagation
         assert roof["status"] == "intact"
 
@@ -362,8 +375,8 @@ class TestRule10RoofFrontPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_front")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_front"]
         assert roof["status"] == "intact"
 
     def test_roof_front_with_severe_windshield(self):
@@ -401,8 +414,8 @@ class TestRule10RoofFrontPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_front")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_front"]
         assert roof["status"] == "damaged"
         assert roof["damage_level"] == "severe"
 
@@ -439,8 +452,8 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_middle")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_middle"]
         assert roof["status"] == "damaged"
         assert roof["damage_level"] == "severe"
 
@@ -479,17 +492,17 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_rear")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_rear"]
         assert roof["status"] == "damaged"
         assert roof["damage_level"] == "severe"
 
     def test_roof_rear_uncertain_with_severe_pillar_c(self):
-        """roof_rear uncertain + pillar_c_left severe -> damaged severe."""
+        """roof_rear uncertain + pillar_c_left severe (from its primary rear-left view) -> damaged severe."""
         topology = _build_full_topology()
         region_results = [
             {
-                "region": "left",
+                "region": "rear_left_45",
                 "parts": [
                     {
                         "part_id": "pillar_c_left",
@@ -519,8 +532,8 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_rear")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_rear"]
         assert roof["status"] == "damaged"
         assert roof["damage_level"] == "severe"
 
@@ -553,8 +566,8 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_middle")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_middle"]
         # Top view intact should override propagation
         assert roof["status"] == "intact"
 
@@ -593,8 +606,8 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_rear")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_rear"]
         # roof_rear is intact, Rule 11 only triggers on "uncertain"
         assert roof["status"] == "intact"
 
@@ -618,6 +631,6 @@ class TestRule11RoofMiddleRearPropagation:
                 "uncertain_items": [],
             },
         ]
-        result = synthesizer_agent(region_results, topology=topology)
-        roof = next(p for p in result["parts"] if p["part_id"] == "roof_middle")
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_middle"]
         assert roof["status"] == "uncertain"

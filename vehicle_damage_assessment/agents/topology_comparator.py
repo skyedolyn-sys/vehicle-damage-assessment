@@ -6,8 +6,11 @@ Produces a DamageAssessment with structural damage pattern detection.
 from __future__ import annotations
 
 from collections import deque
-from typing import Dict, List, Optional, Set
+from dataclasses import replace
+from typing import Any, Dict, List, Optional, Set
 
+from agents.rules import load_part_profile, load_region_units, load_view_weights
+from agents.view_mapping import canonicalize_view_id
 from config import PARTS_BY_ID
 from models.assessment import DamageAssessment, StructuralDamagePattern
 from models.part_state import DamageLevel, PartActualState, Status
@@ -43,6 +46,338 @@ _SAFETY_CRITICAL_PARTS: Set[str] = {
     "mirror_left",
     "mirror_right",
 }
+
+# Pure-topology consistency rules are enforced here instead of the synthesizer
+# so that structural pattern recognition stays close to the topology graph.
+_ROOF_PARTS: Set[str] = load_part_profile("roof")
+_REGION_UNITS: Dict[str, Set[str]] = load_region_units()
+
+_VIEW_WEIGHTS_CONFIG = load_view_weights()
+_VIEW_WEIGHTS: Dict[str, Any] = _VIEW_WEIGHTS_CONFIG.get("view_weights", {})
+
+_STATUS_PRIORITY: Dict[Status, int] = {
+    Status.MISSING: 4,
+    Status.DAMAGED: 3,
+    Status.UNCERTAIN: 2,
+    Status.INTACT: 1,
+    Status.NOT_APPLICABLE: 0,
+}
+
+_LEVEL_PRIORITY: Dict[DamageLevel, int] = {
+    DamageLevel.SEVERE: 4,
+    DamageLevel.MODERATE: 3,
+    DamageLevel.LIGHT: 2,
+    DamageLevel.NONE: 1,
+    DamageLevel.UNKNOWN: 0,
+}
+
+
+def _append_note(part: PartActualState, note: str) -> PartActualState:
+    """Return a new PartActualState with *note* appended to its notes field."""
+    existing = part.notes or ""
+    new_notes = f"{existing}；{note}" if existing else note
+    return replace(part, notes=new_notes)
+
+
+def _set_damaged_severe(part: PartActualState, damage_type: str, note: str) -> PartActualState:
+    """Return a new PartActualState marked damaged severe with a note."""
+    new_part = replace(
+        part,
+        status=Status.DAMAGED,
+        damage_level=DamageLevel.SEVERE,
+        damage_types=[damage_type],
+        confidence="low",
+    )
+    return _append_note(new_part, note)
+
+
+def _severe_neighbors(
+    neighbors: List[PartActualState],
+    allowed: Set[str],
+) -> List[str]:
+    """Return ids of adjacent parts that are damaged/missing and severe."""
+    return [
+        n.part_id for n in neighbors
+        if n.part_id in allowed
+        and n.status in (Status.DAMAGED, Status.MISSING)
+        and n.damage_level == DamageLevel.SEVERE
+    ]
+
+
+def _has_source_status(part: PartActualState, status: str, regions: Set[str]) -> bool:
+    """Return True if part has an evidence source with the given status in one of the regions."""
+    canonical_regions = {canonicalize_view_id(r) for r in regions}
+    return any(
+        src.get("status") == status and canonicalize_view_id(src.get("region", "")) in canonical_regions
+        for src in part.evidence_sources
+    )
+
+
+class TopologyConsistencyEnforcer:
+    """Enforce geometric/consistency rules that depend only on topology.
+
+    These rules used to live in the synthesizer. They are moved here because
+    they need no evidence-source metadata beyond the resolved part state and
+    the adjacency graph.
+    """
+
+    def __init__(self, topology: VehicleTopology) -> None:
+        self.topology = topology
+
+    def enforce(self, parts: List[PartActualState]) -> List[PartActualState]:
+        """Run all topology-only consistency rules and return updated parts."""
+        by_id = {p.part_id: p for p in parts}
+
+        # 1. Region-unit unification (physically connected groups).
+        by_id = self._unify_region_units(by_id)
+
+        # 2. Infer missing roof parts from intact roof neighbors.
+        by_id = self._infer_missing_roof_parts(by_id)
+
+        # 3. Adjacency rules that need only topology + resolved status/level.
+        updated: List[PartActualState] = []
+        for part in parts:
+            state = by_id.get(part.part_id, part)
+            updated.append(self._apply_adjacency_rules(state, by_id))
+
+        return updated
+
+    # ------------------------------------------------------------------
+    # Region units
+    # ------------------------------------------------------------------
+
+    def _unify_region_units(
+        self, by_id: Dict[str, PartActualState]
+    ) -> Dict[str, PartActualState]:
+        """Force unified conclusions within physically connected region units.
+
+        Worst status wins, but damaged overrides missing when both are present.
+        """
+        result = dict(by_id)
+        for unit_name, members in _REGION_UNITS.items():
+            present = [result[m] for m in members if m in result]
+            if not present:
+                continue
+
+            statuses = [p.status for p in present]
+            levels = [p.damage_level for p in present]
+
+            unit_status = (
+                Status.DAMAGED
+                if Status.DAMAGED in statuses
+                else max(statuses, key=lambda s: _STATUS_PRIORITY.get(s, 0))
+            )
+            unit_level = (
+                DamageLevel.SEVERE
+                if DamageLevel.SEVERE in levels
+                else max(levels, key=lambda lvl: _LEVEL_PRIORITY.get(lvl, 0))
+            )
+
+            note = f"区域单元统一结论（{unit_name}）"
+            for member in present:
+                new_part = replace(
+                    member,
+                    status=unit_status,
+                    damage_level=unit_level,
+                )
+                if not (member.notes or "").startswith(note):
+                    new_part = _append_note(new_part, note)
+                result[member.part_id] = new_part
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Missing-roof inference
+    # ------------------------------------------------------------------
+
+    def _infer_missing_roof_parts(
+        self, by_id: Dict[str, PartActualState]
+    ) -> Dict[str, PartActualState]:
+        """Infer an intact roof part when it is uncertain and roof neighbours are intact."""
+        result = dict(by_id)
+
+        for part_id, state in list(result.items()):
+            if state.status != Status.UNCERTAIN or part_id not in _ROOF_PARTS:
+                continue
+
+            node = self.topology.get_node(part_id)
+            if node is None:
+                continue
+
+            intact_roof_neighbors = [
+                adj.part_id
+                for adj in self.topology.get_adjacent(part_id)
+                if adj.part_id in _ROOF_PARTS
+                and result.get(adj.part_id) is not None
+                and result[adj.part_id].status == Status.INTACT
+            ]
+            if not intact_roof_neighbors:
+                continue
+
+            result[part_id] = replace(
+                state,
+                status=Status.INTACT,
+                damage_level=DamageLevel.NONE,
+                confidence="low",
+                notes=(
+                    f"该部件无直接视角覆盖，从相邻 intact 车顶部件推断："
+                    f"{', '.join(intact_roof_neighbors)}"
+                ),
+            )
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Adjacency rules
+    # ------------------------------------------------------------------
+
+    def _apply_adjacency_rules(
+        self,
+        part: PartActualState,
+        by_id: Dict[str, PartActualState],
+    ) -> PartActualState:
+        """Apply pure-topology adjacency rules to a single part."""
+        node = self.topology.get_node(part.part_id)
+        if node is None:
+            return part
+
+        adjacents = self.topology.get_adjacent(part.part_id)
+        neighbors = [by_id.get(adj.part_id) for adj in adjacents]
+        neighbors = [n for n in neighbors if n is not None]
+
+        new_part = part
+
+        # Rule 1: intact next to damaged/missing -> cap confidence at medium.
+        if new_part.status == Status.INTACT and new_part.confidence == "high":
+            damaged = [
+                n.part_id
+                for n in neighbors
+                if n.status in (Status.DAMAGED, Status.MISSING)
+            ]
+            if damaged:
+                new_part = replace(new_part, confidence="medium")
+                new_part = _append_note(
+                    new_part, f"相邻部件存在损伤，降低置信度：{', '.join(damaged)}"
+                )
+
+        # Rule 2: sunroof level should not be lower than adjacent damaged roof.
+        if part.part_id == "sunroof_glass" and new_part.status == Status.DAMAGED:
+            for neighbor in neighbors:
+                if (
+                    neighbor.part_id in _ROOF_PARTS
+                    and neighbor.status == Status.DAMAGED
+                    and _LEVEL_PRIORITY.get(neighbor.damage_level, 0)
+                    > _LEVEL_PRIORITY.get(new_part.damage_level, 0)
+                ):
+                    new_part = replace(
+                        new_part, damage_level=neighbor.damage_level
+                    )
+                    new_part = _append_note(
+                        new_part,
+                        f"相邻车顶部件 {neighbor.part_id} 为 {neighbor.damage_level.value}，天窗级别同步上调",
+                    )
+
+        # Rule 3: door next to severely damaged fender/bumper cannot stay intact.
+        if part.part_id.startswith("door_") and new_part.status == Status.INTACT:
+            severe = [
+                n.part_id
+                for n in neighbors
+                if n.status == Status.DAMAGED
+                and n.damage_level == DamageLevel.SEVERE
+            ]
+            if severe:
+                new_part = replace(new_part, confidence="low")
+                new_part = _append_note(
+                    new_part,
+                    f"相邻部件严重受损，降低车门置信度：{', '.join(severe)}",
+                )
+
+        # Rule 9: Pillar-to-roof/structural propagation.
+        # Pillars are structural safety components. If a pillar is uncertain or
+        # missing and any adjacent structural part (same-side roof, windshield,
+        # or neighboring pillar) is damaged severe, the pillar is likely damaged
+        # too due to structural continuity.  Only propagate to pillars that have
+        # at least one evidence source (i.e. were actually observed/assessed).
+        if (
+            part.part_id.startswith("pillar_")
+            and new_part.status in (Status.UNCERTAIN, Status.MISSING)
+            and new_part.evidence_sources
+        ):
+            side = part.part_id.split("_")[-1]
+            allowed = {
+                "roof_front",
+                "roof_middle",
+                "roof_rear",
+                "windshield_front",
+                "windshield_rear",
+                f"pillar_a_{side}",
+                f"pillar_b_{side}",
+                f"pillar_c_{side}",
+            }
+            allowed = allowed - {part.part_id}
+            severe_neighbors = _severe_neighbors(neighbors, allowed)
+            if severe_neighbors:
+                primary_regions = {canonicalize_view_id(v) for v in _VIEW_WEIGHTS.get(part.part_id, {}).get("primary", [])}
+                if not _has_source_status(new_part, "intact", primary_regions):
+                    new_part = _set_damaged_severe(
+                        new_part,
+                        "deformation",
+                        f"推断：相邻结构件严重损伤（{', '.join(severe_neighbors)}），立柱同步受损",
+                    )
+
+        # Rule 10: Roof-front edge propagation.
+        # If roof_front is intact or uncertain, and a front corner view reports
+        # severe damage to the windshield_front or same-side pillar_a, and there
+        # is no top-view intact evidence that clearly refutes it, infer roof_front
+        # as damaged severe. Front collisions often crumple the roof-front edge
+        # where the A-pillars meet the roof rail.
+        if (
+            part.part_id == "roof_front"
+            and new_part.status in (Status.INTACT, Status.UNCERTAIN)
+            and new_part.evidence_sources
+        ):
+            severe_front_structural = []
+            for side in ("left", "right"):
+                pillar_id = f"pillar_a_{side}"
+                neighbor = by_id.get(pillar_id)
+                if neighbor and neighbor.status in (Status.DAMAGED, Status.MISSING) and neighbor.damage_level == DamageLevel.SEVERE:
+                    severe_front_structural.append(pillar_id)
+            windshield = by_id.get("windshield_front")
+            if windshield and windshield.status in (Status.DAMAGED, Status.MISSING) and windshield.damage_level == DamageLevel.SEVERE:
+                severe_front_structural.append("windshield_front")
+            if severe_front_structural and not _has_source_status(new_part, "intact", {"top"}):
+                new_part = _set_damaged_severe(
+                    new_part,
+                    "deformation",
+                    f"前部结构件严重受损（{', '.join(severe_front_structural)}），推断车顶前缘同步受损",
+                )
+
+        # Rule 11: Roof-middle/rear propagation.
+        # If roof_middle or roof_rear is uncertain and adjacent roof/pillar parts
+        # are damaged severe, infer damaged severe. This handles cases where side
+        # views show roof rail deformation but the top view is missing or unclear.
+        if (
+            part.part_id in ("roof_middle", "roof_rear")
+            and new_part.status == Status.UNCERTAIN
+            and new_part.evidence_sources
+        ):
+            if part.part_id == "roof_middle":
+                allowed = {"roof_front", "roof_rear", "sunroof_glass", "roof_rack"}
+            else:
+                allowed = {"roof_middle", "windshield_rear", "trunk_lid", "tailgate"}
+            for side in ("left", "right"):
+                allowed.add(f"pillar_b_{side}")
+                if part.part_id == "roof_rear":
+                    allowed.add(f"pillar_c_{side}")
+            severe_neighbors = _severe_neighbors(neighbors, allowed)
+            if severe_neighbors and not _has_source_status(new_part, "intact", {"top"}):
+                new_part = _set_damaged_severe(
+                    new_part,
+                    "deformation",
+                    f"相邻车顶/立柱结构严重受损（{', '.join(severe_neighbors)}），推断该部位同步受损",
+                )
+
+        return new_part
 
 
 class TopologyComparator:
@@ -82,16 +417,16 @@ class TopologyComparator:
             state = self._resolve_state(node_id, node, actual_by_id)
             parts.append(state)
 
-            if state.status == Status.MISSING:
-                missing_parts.append(node_id)
-            elif state.status == Status.DAMAGED:
-                damaged_parts.append(node_id)
-            elif state.status == Status.INTACT:
-                intact_parts.append(node_id)
-            elif state.status == Status.UNCERTAIN:
-                uncertain_parts.append(node_id)
+        # 2. Enforce topology-only consistency rules.
+        parts = TopologyConsistencyEnforcer(self.topology).enforce(parts)
 
-        # 2. Structural pattern detection.
+        # Recompute classified lists after enforcement.
+        missing_parts = [p.part_id for p in parts if p.status == Status.MISSING]
+        damaged_parts = [p.part_id for p in parts if p.status == Status.DAMAGED]
+        intact_parts = [p.part_id for p in parts if p.status == Status.INTACT]
+        uncertain_parts = [p.part_id for p in parts if p.status == Status.UNCERTAIN]
+
+        # 3. Structural pattern detection.
         damaged_node_ids: Set[str] = set(missing_parts) | set(damaged_parts)
         patterns = self._detect_patterns(damaged_node_ids, parts)
 

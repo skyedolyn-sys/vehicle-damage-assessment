@@ -20,9 +20,11 @@ import traceback
 from typing import Any, Dict, List
 
 from agents import build_vehicle_topology, vehicle_prior_agent
+from agents.output_validator import _filter_uncertain_items
 from agents.planner_agent import planner_agent
 from agents.reviewer_subagent import reviewer_subagent
 from agents.synthesizer import synthesizer_agent
+from agents.topology_comparator import compare_topology
 from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
@@ -31,6 +33,7 @@ from agents.view_mapping import (
 )
 from agents.vision_subagent import vision_subagent
 from config import MAX_CONCURRENT_API_CALLS
+from models.part_state import PartActualState, Status, DamageLevel
 from models.topology import VehicleTopology
 
 
@@ -101,7 +104,12 @@ async def assessment_orchestrator(
         async with semaphore:
             try:
                 result = await vision_subagent(view_id, photos, vehicle_prior, topology)
-                logger.info("[orchestrator] vision subagent %s returned parts=%d states=%d", view_id, len(result.get("parts", [])), len(result.get("part_actual_states", [])))
+                logger.info(
+                    "[orchestrator] vision subagent %s returned parts=%d states=%d",
+                    view_id,
+                    len(result.get("parts", [])),
+                    len(result.get("part_actual_states", [])),
+                )
                 return result
             except Exception as exc:
                 logger.error("[orchestrator] Vision subagent failed for %s: %s", view_id, exc, exc_info=True)
@@ -194,29 +202,40 @@ async def assessment_orchestrator(
             }
         )
 
-    # Merge uncertain items from reviewer.
+    # Use the synthesizer for deterministic merging with traceability.
+    merged = synthesizer_agent(region_results, vehicle_prior, topology)
+
+    # Collect part_actual_states and apply reviewer overrides to objects directly.
+    actual_states: List[PartActualState] = list(merged.get("part_actual_states", []))
+    state_by_id: Dict[str, PartActualState] = {s.part_id: s for s in actual_states}
+
+    for override in review.get("reviewed_part_actual_states", []):
+        if not isinstance(override, PartActualState):
+            continue
+        existing = state_by_id.get(override.part_id)
+        if existing is None:
+            state_by_id[override.part_id] = override
+        else:
+            state_by_id[override.part_id] = _merge_two_states(existing, override)
+
+    actual_states = list(state_by_id.values())
+
+    # ------------------------------------------------------------------
+    # Step 6: Compare against topology to produce DamageAssessment
+    # ------------------------------------------------------------------
+    assessment = compare_topology(topology, actual_states)
+    assessment_result = assessment.to_legacy_result()
+
+    # Merge uncertain items from reviewer and subagents, then filter out items
+    # whose referenced part has already been resolved (mirrors the logic that
+    # used to live in output_validator.validate_and_enrich).
     all_uncertain_items: List[Dict[str, Any]] = []
     for result in successful_results:
         all_uncertain_items.extend(result.get("uncertain_items", []))
     all_uncertain_items.extend(review.get("added_uncertain_items", []))
-
-    # Use the synthesizer for deterministic merging with traceability.
-    merged = synthesizer_agent(region_results, vehicle_prior, topology)
-
-    # Apply reviewer overrides when the reviewer produced revised part states.
-    for override in review.get("reviewed_part_actual_states", []):
-        if not isinstance(override, PartActualState):
-            continue
-        for part in merged.get("parts", []):
-            if part.get("part_id") == override.part_id:
-                part["status"] = override.status.value
-                part["damage_level"] = override.damage_level.value
-                part["confidence"] = override.confidence
-                part["notes"] = override.notes
-                part["evidence_photo"] = list(override.evidence_photos)
-                break
-
-    merged["uncertain_items"] = all_uncertain_items
+    all_uncertain_items = _filter_uncertain_items(
+        all_uncertain_items, assessment_result.get("parts", [])
+    )
 
     # Collect photos excluded from exterior assessment for transparency.
     excluded_photos: List[Dict[str, Any]] = []
@@ -248,7 +267,8 @@ async def assessment_orchestrator(
         "review": review,
         "excluded_photos": excluded_photos,
         "additional_findings": all_additional_findings,
-        **merged,
+        **assessment_result,
+        "uncertain_items": all_uncertain_items,
     }
 
 
@@ -312,9 +332,8 @@ def _merge_subagent_results(
     }
 
 
-def _merge_two_states(a: Any, b: Any) -> Any:
+def _merge_two_states(a: PartActualState, b: PartActualState) -> PartActualState:
     """Merge two PartActualState objects conservatively."""
-    from models.part_state import PartActualState, Status, DamageLevel
 
     # Status priority: missing > damaged > uncertain > intact
     status_priority = {
@@ -346,6 +365,25 @@ def _merge_two_states(a: Any, b: Any) -> Any:
 
     damage_types = list(set(a.damage_types) | set(b.damage_types))
     evidence_photos = list(dict.fromkeys(a.evidence_photos + b.evidence_photos))
+
+    def _source_key(src: Dict[str, Any]) -> tuple:
+        photos = src.get("evidence_photo", [])
+        return (
+            src.get("region", ""),
+            src.get("status", ""),
+            src.get("damage_level", ""),
+            src.get("confidence", ""),
+            tuple(sorted(photos)) if isinstance(photos, list) else tuple(),
+        )
+
+    seen_keys: set = set()
+    evidence_sources: List[Dict[str, Any]] = []
+    for src in a.evidence_sources + b.evidence_sources:
+        key = _source_key(src)
+        if key not in seen_keys:
+            seen_keys.add(key)
+            evidence_sources.append(dict(src))
+
     notes = "；".join(filter(None, [a.notes, b.notes]))
 
     return PartActualState(
@@ -362,6 +400,8 @@ def _merge_two_states(a: Any, b: Any) -> Any:
         confidence=worst_confidence,
         evidence_photos=evidence_photos,
         notes=notes,
+        photo_type=a.photo_type if a.photo_type != "unknown" else b.photo_type,
+        evidence_sources=evidence_sources,
     )
 
 

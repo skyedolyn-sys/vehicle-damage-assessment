@@ -38,13 +38,13 @@ class TestIntegrationBuildAndCompare:
     """End-to-end: build topology from vehicle info, compare with actual states."""
 
     def test_build_topology_has_all_nodes(self, sample_vehicle_info, sample_vehicle_prior):
-        """Building a topology yields 27 nodes and correct vehicle metadata."""
+        """Building a topology yields 33 nodes and correct vehicle metadata."""
         topo = build_vehicle_topology(sample_vehicle_info, sample_vehicle_prior)
 
         assert isinstance(topo, VehicleTopology)
         assert topo.vehicle_id == "v-int-001"
         assert topo.vehicle_name == "Integration Test Sedan"
-        assert len(topo.nodes) == 27
+        assert len(topo.nodes) == 33
         assert len(topo.regions) == 8
 
     def test_compare_output_has_required_keys(self, sample_vehicle_info, sample_vehicle_prior):
@@ -88,7 +88,7 @@ class TestIntegrationBuildAndCompare:
         assert result.topology_model is not None
 
         # Parts list
-        assert len(result.parts) == 27
+        assert len(result.parts) == 33
         hood_state = next(p for p in result.parts if p.part_id == "hood")
         assert hood_state.status == Status.DAMAGED
         assert hood_state.damage_level == DamageLevel.MODERATE
@@ -109,7 +109,7 @@ class TestIntegrationBuildAndCompare:
         assert result.primary_damage_zone == "front"
 
         # Summary
-        assert result.summary["total_parts"] == 27
+        assert result.summary["total_parts"] == 33
         assert result.summary["damaged_count"] == 2
         assert result.summary["missing_count"] == 0
 
@@ -208,7 +208,7 @@ class TestIntegrationBuildAndCompare:
 
         # parts array should contain frontend-friendly dicts (arrays for
         # multi-value fields so the existing HTML UI can render them).
-        assert len(legacy["parts"]) == 27
+        assert len(legacy["parts"]) == 33
         hood_legacy = next(p for p in legacy["parts"] if p["part_id"] == "hood")
         assert hood_legacy["status"] == "intact"
         assert hood_legacy["damage_level"] == "none"
@@ -216,12 +216,12 @@ class TestIntegrationBuildAndCompare:
         assert hood_legacy["evidence_photo"] == []
 
     def test_empty_actual_states_all_uncertain(self, sample_vehicle_info, sample_vehicle_prior):
-        """When no actual states are provided, all 25 nodes are UNCERTAIN."""
+        """When no actual states are provided, all 33 nodes are UNCERTAIN."""
         topo = build_vehicle_topology(sample_vehicle_info, sample_vehicle_prior)
         result = compare_topology(topo, [])
 
-        assert len(result.parts) == 27
-        assert len(result.uncertain_parts) == 27
+        assert len(result.parts) == 33
+        assert len(result.uncertain_parts) == 33
         assert result.damaged_parts == []
         assert result.missing_parts == []
         assert result.intact_parts == []

@@ -6,7 +6,7 @@
 {
   "photo_views": [
     {"photo_id": "167111-02.png", "view_id": "front_left_45", "photo_type": "wide_shot", "confidence": "high", "reason": "车头朝画面右侧，车身向左侧延伸，左前大灯和左前翼子板完整可见"},
-    {"photo_id": "167111-03.png", "view_id": "front_right", "photo_type": "wide_shot", "confidence": "high", "reason": "车头朝画面左侧，车身向右侧延伸，右前大灯和右前翼子板完整可见"},
+    {"photo_id": "167111-03.png", "view_id": "front_right_45", "photo_type": "wide_shot", "confidence": "high", "reason": "车头朝画面左侧，车身向右侧延伸，右前大灯和右前翼子板完整可见"},
     {"photo_id": "167111-05.png", "view_id": "rear_left_45", "photo_type": "wide_shot", "confidence": "high", "reason": "车尾朝画面右侧，车身向左侧延伸，左后尾灯和左后翼子板完整可见"},
     {"photo_id": "167111-10.png", "view_id": "rear_right_45", "photo_type": "wide_shot", "confidence": "high", "reason": "车尾朝画面左侧，车身向右侧延伸，右后尾灯和右后翼子板完整可见"},
     {"photo_id": "167111-21.png", "view_id": "right_90", "photo_type": "close_up_damage", "confidence": "high", "reason": "右后门局部凹陷特写，仅证明该局部有损伤，不能证明其他右侧面区域完好"},
@@ -70,4 +70,5 @@
    - 若 A柱/B柱/C柱、车顶侧边、车门占画面主体或明显变形 → 判为对应侧面视角（front_left_45 / left_90 / rear_left_45 等）
    - 只有当车头正面部件占绝对主体且左右对称时，才判为 front
 16. **单一部件损伤特写规则**：如果一张照片只是某个损伤部件的局部特写（例如仅显示 A柱断裂处、车顶塌陷处、翼子板撕裂处），不能证明车头/车尾正面完整，必须根据该部件所在车身侧判定视角，不得使用 front/rear。
+17. **输出格式强制要求**：最终答案必须且只能是一个合法的 JSON 对象，直接以 `{` 开头、以 `}` 结尾，不要在 JSON 前写分析文字，也不要把 JSON 放进代码块或任何标签内。
 

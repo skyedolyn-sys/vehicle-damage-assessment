@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List
+from typing import Any, Dict, List
 
 
 class Status(str, Enum):
@@ -50,8 +50,10 @@ class PartActualState:
     evidence_photos: List[str] = field(default_factory=list)
     notes: str = ""
     adjacent_status: Dict[str, str] = field(default_factory=dict)
+    photo_type: str = "unknown"
+    evidence_sources: List[Dict[str, Any]] = field(default_factory=list)
 
-    def to_legacy_dict(self) -> Dict[str, str]:
+    def to_legacy_dict(self) -> Dict[str, Any]:
         """Return a flat dict compatible with the old synthesizer / output_validator format.
 
         Keys: part_id, part_name, part_category, side, status, damage_level,
@@ -127,6 +129,13 @@ class PartActualState:
         elif photo_raw:
             evidence_photos = [p.strip() for p in photo_raw.split(",") if p.strip()]
 
+        evidence_sources = []
+        sources_raw = data.get("evidence_sources", [])
+        if isinstance(sources_raw, list):
+            evidence_sources = [
+                dict(src) for src in sources_raw if isinstance(src, dict)
+            ]
+
         return cls(
             part_id=data.get("part_id", ""),
             part_name=data.get("part_name", ""),
@@ -138,6 +147,8 @@ class PartActualState:
             confidence=data.get("confidence", "low"),
             evidence_photos=evidence_photos,
             notes=data.get("notes", ""),
+            photo_type=data.get("photo_type", "unknown"),
+            evidence_sources=evidence_sources,
         )
 
     @classmethod
