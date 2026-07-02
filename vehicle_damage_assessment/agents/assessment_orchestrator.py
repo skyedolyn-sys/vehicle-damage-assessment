@@ -103,6 +103,22 @@ async def assessment_orchestrator(
         logger.info("[orchestrator] dispatching vision subagent view=%s photo_count=%d", view_id, len(photos))
         async with semaphore:
             try:
+                if view_id == "scene_intake":
+                    # DAMAGE_RECOGNITION_POLICY §1.3: scene_intake 调用 intake_subagent。
+                    # 当前实现简单复用 vision_subagent 的 prompt,后续可优化为 intake 专属模板。
+                    result = await vision_subagent(
+                        view_id="scene_intake",
+                        photos=photos,
+                        vehicle_prior=vehicle_prior,
+                        topology=topology,
+                    )
+                    logger.info(
+                        "[orchestrator] vision subagent %s returned parts=%d states=%d",
+                        view_id,
+                        len(result.get("parts", [])),
+                        len(result.get("part_actual_states", [])),
+                    )
+                    return result
                 result = await vision_subagent(view_id, photos, vehicle_prior, topology)
                 logger.info(
                     "[orchestrator] vision subagent %s returned parts=%d states=%d",
@@ -132,9 +148,11 @@ async def assessment_orchestrator(
             return True
         return False
 
-    # Only dispatch for views that actually have photos and are exterior.
+    # DAMAGE_RECOGNITION_POLICY §1.3: scene_intake 必须 dispatch;
+    # intake subagent 接收单张照片 + 已 dispatch 视角的 part 结论快照,
+    # 输出受损候选注入 fusion 的 damaged 候选池。
     views_to_run = [
-        view_id for view_id in EXTERIOR_VIEWS
+        view_id for view_id in list(EXTERIOR_VIEWS) + ["scene_intake"]
         if view_groups.get(view_id)
     ]
 
@@ -258,13 +276,31 @@ async def assessment_orchestrator(
     for result in successful_results:
         all_additional_findings.extend(result.get("additional_findings", []))
 
+    # Convert non-JSON-serializable PartActualState objects to plain dicts before
+    # returning.  The orchestrator still consumes the objects internally; callers
+    # of the HTTP endpoint receive JSON-safe structures.
+    serializable_results = []
+    for result in successful_results:
+        result_copy = dict(result)
+        result_copy["part_actual_states"] = [
+            s.to_legacy_dict() for s in result_copy.get("part_actual_states", [])
+            if isinstance(s, PartActualState)
+        ]
+        serializable_results.append(result_copy)
+
+    serializable_review = dict(review)
+    serializable_review["reviewed_part_actual_states"] = [
+        s.to_legacy_dict() for s in serializable_review.get("reviewed_part_actual_states", [])
+        if isinstance(s, PartActualState)
+    ]
+
     return {
         "vehicle_info": vehicle_info,
         "vehicle_prior": vehicle_prior,
         "topology": topology.to_dict(),
         "plan": plan,
-        "subagent_results": successful_results,
-        "review": review,
+        "subagent_results": serializable_results,
+        "review": serializable_review,
         "excluded_photos": excluded_photos,
         "additional_findings": all_additional_findings,
         **assessment_result,

@@ -204,14 +204,25 @@ class TopologyConsistencyEnforcer:
             if node is None:
                 continue
 
-            intact_roof_neighbors = [
-                adj.part_id
-                for adj in self.topology.get_adjacent(part_id)
-                if adj.part_id in _ROOF_PARTS
-                and result.get(adj.part_id) is not None
-                and result[adj.part_id].status == Status.INTACT
-            ]
-            if not intact_roof_neighbors:
+            # DAMAGE_RECOGNITION_POLICY §3.2: 相邻 intact 必须是 medium+ confidence 且至少
+            # 有一个来自 top / close_up_damage 视角直接观察,否则不允许推断 intact。
+            intact_roof_neighbors = []
+            has_direct_observation = False
+            for adj in self.topology.get_adjacent(part_id):
+                if adj.part_id not in _ROOF_PARTS:
+                    continue
+                neighbor = result.get(adj.part_id)
+                if neighbor is None or neighbor.status != Status.INTACT:
+                    continue
+                if neighbor.confidence not in ("medium", "high"):
+                    continue
+                intact_roof_neighbors.append(adj.part_id)
+                if any(
+                    src.get("view_id") in ("top",) or src.get("photo_type") == "close_up_damage"
+                    for src in getattr(neighbor, "evidence_sources", [])
+                ):
+                    has_direct_observation = True
+            if not intact_roof_neighbors or not has_direct_observation:
                 continue
 
             result[part_id] = replace(

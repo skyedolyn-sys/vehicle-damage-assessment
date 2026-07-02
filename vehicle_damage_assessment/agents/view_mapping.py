@@ -13,6 +13,9 @@ from __future__ import annotations
 from typing import Dict, List, Set
 
 
+# DAMAGE_RECOGNITION_POLICY §1.2: 视角无法识别时使用 scene_intake 而非 unknown。
+SCENE_INTAKE_VIEW = "scene_intake"
+
 #: Canonical view identifiers used across the assessment pipeline.
 #: Nine exterior buckets (cardinal sides, four diagonal corners, plus top-down)
 #: plus non-exterior categories.
@@ -99,10 +102,10 @@ EXTERIOR_VIEWS: Set[str] = {
 }
 
 #: Views that should be ignored by the exterior assessment pipeline.
-NON_EXTERIOR_VIEWS: Set[str] = {"interior", "auxiliary", "unknown"}
+NON_EXTERIOR_VIEWS: Set[str] = {"interior", "auxiliary", "unknown", "scene_intake"}
 
 #: Photo type categories used by the pre-filter before view planning.
-PHOTO_TYPE_CATEGORIES: Set[str] = {"exterior", "interior", "auxiliary", "unknown"}
+PHOTO_TYPE_CATEGORIES: Set[str] = {"exterior", "interior", "auxiliary", "unknown", "scene_intake"}
 
 
 def get_regions_for_view(view_id: str) -> List[str]:

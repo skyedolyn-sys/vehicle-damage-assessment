@@ -51,6 +51,16 @@ _CRITICAL_FUSION_PARTS: Set[str] = {
     "pillar_c_right",
 }
 
+# DAMAGE_RECOGNITION_POLICY §2.1: 高敏感部件集合——这些部件的 severe 损伤信号必须穿透 primary-intact。
+_HIGH_SENSITIVITY_PARTS = {
+    "windshield_front", "windshield_rear", "sunroof_glass",
+    "roof_front", "roof_middle", "roof_rear",
+    "pillar_a_left", "pillar_a_right",
+    "pillar_b_left", "pillar_b_right",
+    "pillar_c_left", "pillar_c_right",
+    "hood", "trunk_lid",
+}
+
 #: Mapping from view id to a (region, side) tag so we can prefer conclusions
 #: from a view that is the canonical vantage for a part.
 _VIEW_REGION_TAG: Dict[str, str] = {
@@ -235,15 +245,36 @@ def fuse_evidence(
 
     # Rule 1: any source reports damage and no primary-view intact contradicts.
     if damaged or missing:
-        # If a primary view reports intact, trust it (primary view beats
-        # diagonal edge views).  Otherwise prefer damaged/missing.
+        # Rule 1 (DAMAGE_RECOGNITION_POLICY §3.1 / §4.1):
+        # primary-intact 仅在 high confidence 时 dominate;高敏感部件 severe 永远穿透。
         primary_priority = _PART_VIEW_PRIORITY.get(part_id, {})
         primary_intact = [
             c for c in intact
             if _view_priority(part_id, c.get("_origin_view", "")) <= 1
         ]
-        if primary_intact and not damaged and not missing:
-            return None
+        high_conf_primary_intact = [c for c in primary_intact if c.get("confidence") == "high"]
+        is_high_sensitivity = part_id in _HIGH_SENSITIVITY_PARTS
+        any_severe_secondary = any(
+            c.get("damage_level") in ("moderate", "severe")
+            for c in damaged + missing
+            if _view_priority(part_id, c.get("_origin_view", "")) > 1
+        )
+        # §4.1: 高敏感部件 severe 信号永远穿透,即便 primary-intact 是 high confidence。
+        if is_high_sensitivity and any(c.get("damage_level") == "severe" for c in damaged + missing):
+            for c in damaged + missing:
+                c["_policy_override"] = "high_sensitivity_severe_passthrough"
+        # §3.1: 仅当 high_conf_primary_intact 且(不是高敏感 或 没有 moderate+ secondary 信号)时才 dominate。
+        elif high_conf_primary_intact and not (is_high_sensitivity and any_severe_secondary):
+            if not damaged and not missing:
+                return None
+            # 否则 fall through 到 damaged,但降一档
+            for c in damaged + missing:
+                if c.get("damage_level") == "severe":
+                    c["damage_level"] = "moderate"
+                    c["_downgraded_for_low_confidence"] = True
+                elif c.get("damage_level") == "moderate":
+                    c["damage_level"] = "light"
+                    c["_downgraded_for_low_confidence"] = True
         chosen = damaged[0] if damaged else missing[0]
         best_level = max(
             (_level_value(c.get("damage_level", "unknown")) for c in damaged + missing),

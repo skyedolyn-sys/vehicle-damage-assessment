@@ -37,6 +37,7 @@ from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
     PHOTO_TYPE_CATEGORIES,
+    SCENE_INTAKE_VIEW,
     STANDARD_VIEWS,
     get_all_exterior_views,
     get_display_name,
@@ -81,14 +82,19 @@ _FILENAME_VIEW_HINTS: List[Tuple[str, str]] = [
     ("铭牌", "auxiliary"),
     ("证件", "auxiliary"),
     ("车牌", "auxiliary"),
+    ("牌照", "auxiliary"),
+    ("车架号", "auxiliary"),
+    ("登记证书", "auxiliary"),
+    ("保单", "auxiliary"),
+    ("发票", "auxiliary"),
     ("内饰", "interior"),
     ("车内", "interior"),
     ("座椅", "interior"),
-    ("-01.", "auxiliary"),
-    ("-09.", "auxiliary"),
-    ("-07.", "interior"),
-    ("-08.", "interior"),
-    ("-11.", "interior"),
+    ("驾驶舱", "interior"),
+    ("方向盘", "interior"),
+    ("仪表盘", "interior"),
+    ("中控", "interior"),
+    ("后排", "interior"),
 ]
 
 
@@ -279,20 +285,23 @@ def _stabilize_plan(
     photo_by_id = {p.get("id", ""): p for p in photos}
 
     # Enforce photo type on every entry and mark non-exterior views accordingly.
+    # DAMAGE_RECOGNITION_POLICY §1.2: 不再把无法识别的照片静默丢进 unknown 桶;
+    # 改为 scene_intake,由 orchestrator 调度 intake subagent 处理。
     stabilized: List[Dict[str, Any]] = []
     for entry in photo_views:
         photo_id = entry.get("photo_id", "")
-        view_id = entry.get("view_id", "unknown")
+        view_id = entry.get("view_id", "scene_intake")
         photo_type = photo_types.get(photo_id, "")
+        planner_confidence = entry.get("confidence", "low")
         if photo_type in ("interior", "auxiliary"):
             view_id = photo_type
-        elif photo_type == "unknown" and view_id not in NON_EXTERIOR_VIEWS:
-            view_id = "unknown"
+        elif photo_type in ("unknown", "scene_intake") and view_id not in NON_EXTERIOR_VIEWS:
+            view_id = "scene_intake"
         stabilized.append(
             {
                 "photo_id": photo_id,
                 "view_id": view_id,
-                "confidence": entry.get("confidence", "low"),
+                "confidence": planner_confidence,
                 "reason": entry.get("reason", ""),
             }
         )
@@ -745,16 +754,19 @@ def _ensure_exterior_coverage(
             new_photo_views.append(entry)
             seen_ids.add(photo_id)
 
-    return {
-        "photo_views": new_photo_views,
-        "view_groups": assigned_groups,
-        "coverage_gaps": coverage_gaps,
-        "workflow_plan": {
-            "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
-            "priority_views": priority_views,
-            "missing_critical_views": missing_critical_views,
+    return _deterministic_stabilize(
+        {
+            "photo_views": new_photo_views,
+            "view_groups": assigned_groups,
+            "coverage_gaps": coverage_gaps,
+            "workflow_plan": {
+                "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
+                "priority_views": priority_views,
+                "missing_critical_views": missing_critical_views,
+            },
         },
-    }
+        photos,
+    )
 
 
 async def _fallback_replan(
@@ -852,7 +864,7 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
 
     - Keeps the highest-confidence label for each photo.
     - Merges front/rear corner views that differ only by side (e.g. two
-      front_left photos) into one representative photo per canonical view.
+      front_left_45 photos) into one representative photo per canonical view.
     - When multiple photos map to the same canonical side view (left/right)
       or corner view, selects the photo whose filename index is most typical
       for that view, preferring high confidence.

@@ -246,9 +246,15 @@ def _resolve_status_roof(candidates: List[Dict[str, Any]]) -> str:
         return "uncertain"
     if secondary and all(c.get("status") == "damaged" for c in secondary):
         return "damaged"
-    # Conflicting or incomplete secondary coverage: prefer intact because rear
-    # structure damage frequently spills over onto roof edges.
-    return "intact"
+    # DAMAGE_RECOGNITION_POLICY §3.3: 车顶不再默认 intact。
+    # 任何 secondary damaged 信号 → uncertain;仅当全部 intact 且至少一条 confidence ≥ medium 才输出 intact。
+    if any(c.get("status") == "damaged" for c in secondary):
+        return "uncertain"
+    if all(c.get("status") == "intact" for c in secondary):
+        if any(c.get("confidence") in ("high", "medium") for c in secondary):
+            return "intact"
+        return "uncertain"
+    return "uncertain"
 
 
 def _resolve_damage_level_roof(
@@ -550,7 +556,11 @@ def _apply_adjacency_rules(
                     and neighbor_level.get(pid) == "severe"
                 ]
                 if severe_adjacent_fenders:
-                    new_part["status"] = "intact"
+                    # DAMAGE_RECOGNITION_POLICY §3.4: 仅当 door 没有 primary 视角证据时,
+                    # 且没有任何 primary 视角报告该门 damaged 时才允许翻 intact。
+                    if severe_adjacent_fenders and not _has_primary_damage_signal(new_part):
+                        new_part["status"] = "intact"
+                        new_part["_adjacency_override"] = True
                     new_part["damage_level"] = "none"
                     new_part["damage_type"] = []
                     new_part["confidence"] = "low"
@@ -828,3 +838,25 @@ def _apply_rear_missing_to_damaged_fallback(
         updated.append(part)
 
     return updated
+
+
+def _has_primary_damage_signal(part: Dict[str, Any]) -> bool:
+    """DAMAGE_RECOGNITION_POLICY §3.4: 该部件是否有 primary 视角报告 damaged?
+
+    Args:
+        part: 部件字典,包含 evidence_sources 列表。每条 source 应有 view_id 与 status 字段。
+
+    Returns:
+        True 如果存在 primary 视角对该部件报告 damaged,False 否则。
+    """
+    from agents.evidence_fusion import _PART_VIEW_PRIORITY
+    part_id = part.get("part_id", "")
+    primary_views = {
+        view_id
+        for view_id, pri in _PART_VIEW_PRIORITY.get(part_id, {}).items()
+        if pri <= 1
+    }
+    return any(
+        src.get("status") == "damaged" and src.get("view_id") in primary_views
+        for src in part.get("evidence_sources", [])
+    )
