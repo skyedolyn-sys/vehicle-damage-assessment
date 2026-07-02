@@ -155,3 +155,57 @@ async def test_planner_agent_adds_missing_entries():
                 result = await planner_agent(photos, {"vehicle": "test"})
     assert len(result["photo_views"]) == 1
     assert result["photo_views"][0]["view_id"] == "front_left_45"
+
+
+
+class TestPlannerViewDerivation:
+    """Planner should derive left_90/right_90 from corner views using standard ids."""
+
+    def test_derives_left_90_from_corner_views(self):
+        from agents.planner_agent import _deterministic_stabilize
+        photos = [
+            {"id": "fl.png", "path": "/fl.png"},
+            {"id": "rl.png", "path": "/rl.png"},
+        ]
+        plan = _deterministic_stabilize(
+            {
+                "photo_views": [
+                    {"photo_id": "fl.png", "view_id": "front_left_45", "confidence": "high", "reason": ""},
+                    {"photo_id": "rl.png", "view_id": "rear_left_45", "confidence": "high", "reason": ""},
+                ],
+                "view_groups": {
+                    "front_left_45": [{"id": "fl.png", "path": "/fl.png", "_planner_view": "front_left_45", "_planner_confidence": "high", "_planner_reason": ""}],
+                    "rear_left_45": [{"id": "rl.png", "path": "/rl.png", "_planner_view": "rear_left_45", "_planner_confidence": "high", "_planner_reason": ""}],
+                },
+                "coverage_gaps": [],
+                "workflow_plan": {"priority_views": ["front_left_45", "rear_left_45"], "missing_critical_views": []},
+            },
+            photos,
+        )
+        assert "left_90" in plan["view_groups"]
+        assert len(plan["view_groups"]["left_90"]) == 1
+        assert plan["view_groups"]["left_90"][0]["_planner_view"] == "left_90"
+
+    def test_derives_right_90_from_corner_views(self):
+        from agents.planner_agent import _deterministic_stabilize
+        photos = [
+            {"id": "fr.png", "path": "/fr.png"},
+            {"id": "rr.png", "path": "/rr.png"},
+        ]
+        plan = _deterministic_stabilize(
+            {
+                "photo_views": [
+                    {"photo_id": "fr.png", "view_id": "front_right_45", "confidence": "high", "reason": ""},
+                    {"photo_id": "rr.png", "view_id": "rear_right_45", "confidence": "high", "reason": ""},
+                ],
+                "view_groups": {
+                    "front_right_45": [{"id": "fr.png", "path": "/fr.png", "_planner_view": "front_right_45", "_planner_confidence": "high", "_planner_reason": ""}],
+                    "rear_right_45": [{"id": "rr.png", "path": "/rr.png", "_planner_view": "rear_right_45", "_planner_confidence": "high", "_planner_reason": ""}],
+                },
+                "coverage_gaps": [],
+                "workflow_plan": {"priority_views": ["front_right_45", "rear_right_45"], "missing_critical_views": []},
+            },
+            photos,
+        )
+        assert "right_90" in plan["view_groups"]
+        assert plan["view_groups"]["right_90"][0]["_planner_view"] == "right_90"

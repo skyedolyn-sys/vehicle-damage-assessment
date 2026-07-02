@@ -634,3 +634,72 @@ class TestRule11RoofMiddleRearPropagation:
         parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
         roof = parts["roof_middle"]
         assert roof["status"] == "uncertain"
+
+
+
+class TestViewWeightsMatch:
+    """Bug: view_weights used short names while orchestrator passed standard view ids."""
+
+    def test_roof_front_from_corner_severe(self):
+        """roof_front intact from top + front_left_45 severe -> damaged severe."""
+        topology = _build_full_topology()
+        region_results = [
+            {
+                "region": "top",
+                "parts": [
+                    {
+                        "part_id": "roof_front",
+                        "status": "intact",
+                        "damage_level": "none",
+                        "damage_type": [],
+                        "confidence": "high",
+                        "evidence_photo": ["photo_02"],
+                        "notes": "俯视完好",
+                    }
+                ],
+                "uncertain_items": [],
+            },
+            {
+                "region": "front_left_45",
+                "parts": [
+                    {
+                        "part_id": "roof_front",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["deformation"],
+                        "confidence": "high",
+                        "evidence_photo": ["photo_01"],
+                        "notes": "A柱根部塌陷",
+                    }
+                ],
+                "uncertain_items": [],
+            },
+        ]
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        roof = parts["roof_front"]
+        assert roof["status"] == "damaged"
+        assert roof["damage_level"] == "severe"
+
+    def test_short_view_name_alias_still_matches_weights(self):
+        """Legacy short view names like 'left' still resolve to correct weight bucket."""
+        region_results = [
+            {
+                "region": "left",
+                "parts": [
+                    {
+                        "part_id": "door_front_left",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["dent"],
+                        "confidence": "high",
+                        "evidence_photo": ["photo_01"],
+                        "notes": "门板严重凹陷",
+                    }
+                ],
+                "uncertain_items": [],
+            },
+        ]
+        result = synthesizer_agent(region_results)
+        door = next(p for p in result["parts"] if p["part_id"] == "door_front_left")
+        assert door["status"] == "damaged"
+        assert door["damage_level"] == "severe"

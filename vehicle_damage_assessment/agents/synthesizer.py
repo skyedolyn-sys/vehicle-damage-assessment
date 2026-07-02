@@ -292,6 +292,17 @@ def _resolve_damage_level_roof(
         # Sunroof is never trusted from secondary-only coverage.
         if is_sunroof:
             return "light"
+        # roof_front: a front-corner view showing severe structural damage at
+        # the A-pillar/roof rail junction is more reliable than a distant top
+        # view; keep severe.
+        if part_id == "roof_front" and base == "severe":
+            corner_severe = [
+                c for c in secondary_damaged
+                if canonicalize_view_id(c.get("_region", "")) in ("front_left_45", "front_right_45")
+                and c.get("damage_level") == "severe"
+            ]
+            if corner_severe:
+                return "severe"
         # roof_rear/middle from rear-only views should not inherit severe from
         # the rear windshield/tailgate area.
         if base == "severe":
