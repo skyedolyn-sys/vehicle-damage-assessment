@@ -433,3 +433,150 @@ class TestPreResolveViewsFromFilename:
             assert entry["view_id"] in EXTERIOR_VIEWS or entry["view_id"] in {"front", "rear", "top"}, (
                 f"photo {entry['photo_id']} view_id={entry['view_id']!r} not in expected set"
             )
+
+
+class TestAugmentCoverageNoPhotoReuse:
+    """DAMAGE_RECOGNITION_POLICY §1.6: planner must never assign the same
+    photo to multiple view groups via deterministic augmentation.
+
+    Observed failure mode (2026-06-22 sample): when the LLM planner
+    returns nothing usable, the old _augment_exterior_coverage rotated
+    the same single photo into 6 different view groups.  Every vision
+    subagent then saw the same image, silently masking real damage
+    visible only from other angles.  The fix: each photo may fill at
+    most one target view; remaining target views stay empty and surface
+    as coverage_gaps.
+    """
+
+    def test_does_not_reuse_photo_across_target_views(self):
+        from agents.planner_agent import _augment_exterior_coverage
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+            for i in range(1, 33)
+        ]
+        plan = {
+            "photo_views": [],
+            "view_groups": {"unknown": photos, "auxiliary": []},
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": [], "missing_critical_views": []},
+        }
+        photo_types = {p["id"]: "exterior" for p in photos}
+
+        out = _augment_exterior_coverage(plan, photos, photo_types)
+
+        target_views = {
+            "front_left_45", "front_right_45",
+            "rear_left_45", "rear_right_45",
+            "left_90", "right_90",
+        }
+        seen = {}
+        for view_id, group in out["view_groups"].items():
+            if view_id not in target_views:
+                continue
+            for p in group:
+                pid = p.get("id")
+                assert pid not in seen, (
+                    f"photo {pid} appears in both {seen[pid]} and {view_id}"
+                )
+                seen[pid] = view_id
+        assert len(seen) == 6, f"expected 6 unique photos, got {len(seen)}"
+
+    def test_leaves_views_empty_when_pool_smaller_than_missing(self):
+        """3 photos, 6 missing views → only 3 should be filled; rest stay
+        empty and appear in coverage_gaps."""
+        from agents.planner_agent import _augment_exterior_coverage
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+            for i in range(1, 4)
+        ]
+        plan = {
+            "photo_views": [],
+            "view_groups": {"unknown": photos, "auxiliary": []},
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": [], "missing_critical_views": []},
+        }
+        photo_types = {p["id"]: "exterior" for p in photos}
+
+        out = _augment_exterior_coverage(plan, photos, photo_types)
+
+        target_views = (
+            "front_left_45", "front_right_45", "rear_left_45",
+            "rear_right_45", "left_90", "right_90",
+        )
+        filled = sum(1 for v in target_views if out["view_groups"].get(v))
+        assert filled == 3, f"expected 3 filled views, got {filled}"
+
+    def test_keeps_priority_views_at_six(self):
+        """The 6-view priority list must remain so the orchestrator can
+        dispatch 6 vision subagents — never collapse to 1 (the
+        pre-fix bug)."""
+        from agents.planner_agent import _augment_exterior_coverage
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+            for i in range(1, 33)
+        ]
+        plan = {
+            "photo_views": [],
+            "view_groups": {"unknown": photos, "auxiliary": []},
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": [], "missing_critical_views": []},
+        }
+        photo_types = {p["id"]: "exterior" for p in photos}
+
+        out = _augment_exterior_coverage(plan, photos, photo_types)
+        priority = out["workflow_plan"]["priority_views"]
+        assert len(priority) == 6, (
+            f"expected 6 priority views, got {len(priority)}: {priority}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_2026_06_22_sample_simulation():
+    """End-to-end: reproduce the bug pattern from the 172852 sample.
+
+    32 photos, LLM returns empty. The planner must:
+    1. Give every photo a view_id entry (no silent drops).
+    2. NOT reuse the same photo across 6 different view groups.
+    3. Surface front/rear as coverage gaps.
+    """
+    from agents.planner_agent import planner_agent
+
+    photos = [
+        {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+        for i in range(1, 33)
+    ]
+
+    async def fake_call_minimax(messages, **kwargs):
+        return ""
+
+    with patch(
+        "agents.planner_agent._build_image_content",
+        return_value={"type": "image_url", "image_url": {"url": "data:fake"}},
+    ):
+        with patch(
+            "agents.planner_agent.call_minimax",
+            new=AsyncMock(side_effect=fake_call_minimax),
+        ):
+            result = await planner_agent(photos, {"vehicle": "Unknown"})
+
+    view_groups = result.get("view_groups", {})
+    target_views = (
+        "front_left_45", "front_right_45", "rear_left_45",
+        "rear_right_45", "left_90", "right_90",
+    )
+    seen = {}
+    for v in target_views:
+        for p in view_groups.get(v, []):
+            pid = p.get("id")
+            assert pid not in seen, (
+                f"BUG: photo {pid} appears in both {seen[pid]} and {v}"
+            )
+            seen[pid] = v
+    priority = result.get("workflow_plan", {}).get("priority_views", [])
+    assert len(priority) == 6
+    coverage_gaps = [g["missing_view"] for g in result.get("coverage_gaps", [])]
+    assert "front" in coverage_gaps
+    assert "rear" in coverage_gaps

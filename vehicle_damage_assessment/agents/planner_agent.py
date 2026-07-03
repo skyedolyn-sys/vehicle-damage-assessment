@@ -908,32 +908,51 @@ def _augment_exterior_coverage(
 
     enriched_groups = {k: list(v) for k, v in view_groups.items()}
 
+    # Track photos already assigned to a CONCRETE exterior view globally.
+    # Without this, a sparse rotation pool (e.g. when the LLM failed and
+    # most photos are parked in "unknown") would assign the same photo to
+    # 6 different exterior views, causing every vision subagent to see
+    # the same image and silently mask real damage visible only from
+    # other angles.  Non-exterior buckets (unknown, interior, auxiliary,
+    # scene_intake) are excluded from this set so photos parked there
+    # by the LLM-failure safety net remain eligible for exterior
+    # rotation.  Prefer leaving a view empty (surfaced as a coverage
+    # gap) over reusing a photo that has nothing new to offer.
+    globally_used_ids: set = set()
+    for _v, _plist in view_groups.items():
+        if not is_exterior_view(_v):
+            continue
+        for _p in _plist:
+            _pid = _p.get("id", "")
+            if _pid:
+                globally_used_ids.add(_pid)
+
     for view_id in missing:
         placed = False
         for candidate in rotation_pool:
             cid = candidate.get("id", "")
             if not cid:
                 continue
-            already_in = {p.get("id", "") for p in enriched_groups.get(view_id, [])}
-            if cid in already_in:
+            if cid in globally_used_ids:
                 continue
             enriched = dict(candidate)
             enriched["_planner_view"] = view_id
             enriched["_planner_confidence"] = "low"
             enriched["_planner_reason"] = "deterministic augment to fill missing view"
             enriched_groups.setdefault(view_id, []).append(enriched)
+            globally_used_ids.add(cid)
             placed = True
             break
         if not placed:
-            # Fall back: take the first rotation_pool entry
-            candidate = rotation_pool[0]
-            cid = candidate.get("id", "")
-            if cid:
-                enriched = dict(candidate)
-                enriched["_planner_view"] = view_id
-                enriched["_planner_confidence"] = "low"
-                enriched["_planner_reason"] = "deterministic augment to fill missing view (no free photo)"
-                enriched_groups.setdefault(view_id, []).append(enriched)
+            # Pool exhausted (rotation_pool smaller than missing views).
+            # Leave this view empty so it shows up as a coverage_gap
+            # entry.  Better to surface a coverage gap than to feed six
+            # subagents the same image and confidently report the wrong
+            # conclusion.
+            logger.info(
+                "[planner] augment: no free photo for view=%s, leaving empty",
+                view_id,
+            )
 
     # Recompute coverage gaps
     coverage_gaps: List[Dict[str, Any]] = []
