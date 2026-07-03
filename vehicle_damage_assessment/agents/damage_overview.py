@@ -145,7 +145,7 @@ def _infer_accident_type(parts: List[PartActualState]) -> Dict[str, Any]:
     damaged_regions: Set[str] = set()
     for part in parts:
         if part.status in (Status.DAMAGED, Status.MISSING):
-            damaged_regions.add(part.region)
+            damaged_regions.add(part.part_category)
     return _infer_accident_type_impl(damaged_regions, parts)
 
 
@@ -178,7 +178,7 @@ def _count_by_region(parts: List[PartActualState], status: Status) -> Dict[str, 
     counts: Dict[str, int] = {}
     for part in parts:
         if part.status == status:
-            counts[part.region] = counts.get(part.region, 0) + 1
+            counts[part.part_category] = counts.get(part.part_category, 0) + 1
     return counts
 
 
@@ -188,7 +188,7 @@ def _max_level_in_region(parts: List[PartActualState], region: str) -> Optional[
     best_level: Optional[str] = None
     best_score = -1
     for part in parts:
-        if part.region != region or part.status != Status.DAMAGED:
+        if part.part_category != region or part.status != Status.DAMAGED:
             continue
         score = level_priority.get(part.damage_level.value, 0)
         if score > best_score:
@@ -202,7 +202,7 @@ def _infer_accident_type(parts: List[PartActualState]) -> Dict[str, Any]:
     damaged_regions: Set[str] = set()
     for part in parts:
         if part.status in (Status.DAMAGED, Status.MISSING):
-            damaged_regions.add(part.region)
+            damaged_regions.add(part.part_category)
     return _infer_accident_type_impl(damaged_regions, parts)
 
 
@@ -212,7 +212,7 @@ def _build_region_summary(parts: List[PartActualState]) -> List[Dict[str, Any]]:
     for part in parts:
         if part.status not in (Status.DAMAGED, Status.MISSING):
             continue
-        region = part.region
+        region = part.part_category
         if region not in region_data:
             region_data[region] = {"damaged_count": 0, "missing_count": 0, "max_level": "none", "parts": []}
         if part.status == Status.MISSING:

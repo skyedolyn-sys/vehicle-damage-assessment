@@ -36,11 +36,15 @@ def base_topology():
 
 
 def _make_state(part_id, region, side, status, damage_level=DamageLevel.NONE, **kwargs):
-    """Helper to create a PartActualState with minimal boilerplate."""
+    """Helper to create a PartActualState with minimal boilerplate.
+
+    The ``region`` parameter is the part_category string (e.g. "front") and is
+    forwarded to the PartActualState field of the same name.
+    """
     return PartActualState(
         part_id=part_id,
         part_name=part_id.replace("_", " "),
-        region=region,
+        part_category=region,
         side=side,
         status=status,
         damage_level=damage_level,

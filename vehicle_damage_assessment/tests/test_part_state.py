@@ -58,7 +58,7 @@ class TestPartActualStateCreation:
         state = PartActualState(
             part_id="hood",
             part_name="引擎盖",
-            region="front",
+            part_category="front",
             side="center",
             status=Status.INTACT,
             damage_level=DamageLevel.NONE,
@@ -80,7 +80,7 @@ class TestPartActualStateCreation:
         state = PartActualState(
             part_id="bumper_front",
             part_name="前保险杠",
-            region="front",
+            part_category="front",
             side="center",
             status=Status.DAMAGED,
             damage_level=DamageLevel.MODERATE,
@@ -107,7 +107,7 @@ class TestPartActualStateLegacyRoundTrip:
         state = PartActualState(
             part_id="hood",
             part_name="引擎盖",
-            region="front",
+            part_category="front",
             side="center",
             status=Status.DAMAGED,
             damage_level=DamageLevel.SEVERE,
@@ -133,7 +133,7 @@ class TestPartActualStateLegacyRoundTrip:
         state = PartActualState(
             part_id="grille_front",
             part_name="前格栅",
-            region="front",
+            part_category="front",
             side="center",
             status=Status.INTACT,
             damage_level=DamageLevel.NONE,
@@ -147,7 +147,7 @@ class TestPartActualStateLegacyRoundTrip:
         original = PartActualState(
             part_id="headlight_front_left",
             part_name="左前大灯",
-            region="front",
+            part_category="front",
             side="front_left",
             status=Status.MISSING,
             damage_level=DamageLevel.SEVERE,
@@ -161,7 +161,7 @@ class TestPartActualStateLegacyRoundTrip:
 
         assert restored.part_id == original.part_id
         assert restored.part_name == original.part_name
-        assert restored.region == original.region
+        assert restored.part_category == original.part_category
         assert restored.side == original.side
         assert restored.status == original.status
         assert restored.damage_level == original.damage_level
@@ -210,13 +210,13 @@ class TestPartActualStateLegacyRoundTrip:
         state = PartActualState.from_region_part(
             part_id="mirror_left",
             part_name="左后视镜",
-            region="left",
+            part_category="left",
             side="front_left",
             status=Status.DAMAGED,
             damage_level=DamageLevel.LIGHT,
         )
         assert state.part_id == "mirror_left"
-        assert state.region == "left"
+        assert state.part_category == "left"
         assert state.side == "front_left"
         assert state.status == Status.DAMAGED
         assert state.damage_level == DamageLevel.LIGHT

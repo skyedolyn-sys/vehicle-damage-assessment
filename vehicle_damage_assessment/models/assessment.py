@@ -45,11 +45,11 @@ class DamageAssessment:
         Includes old keys (parts, assessment_summary, structural_damage_flag,
         structural_damage_reasoning) plus new keys as extensions.
 
-        The ``parts`` list uses :meth:`PartActualState.to_frontend_dict` so that
+        The ``parts`` list uses :meth:`PartActualState.to_dict` so that
         the existing HTML frontend can render ``damage_type`` and
         ``evidence_photo`` with ``.join(', ')``.
         """
-        legacy_parts = [p.to_frontend_dict() for p in self.parts]
+        legacy_parts = [p.to_dict() for p in self.parts]
 
         structural_reasoning = ""
         if self.structural_patterns:

@@ -350,7 +350,7 @@ def _merge_subagent_results(
                 PartActualState(
                     part_id=node_id,
                     part_name=node.node_name if node else PARTS_BY_ID.get(node_id, {}).get("part_name", node_id),
-                    region=node.region if node else "",
+                    part_category=node.region if node else "",
                     side=node.side if node else "",
                     status=Status.UNCERTAIN,
                     damage_level=DamageLevel.UNKNOWN,
@@ -425,7 +425,7 @@ def _merge_two_states(a: PartActualState, b: PartActualState) -> PartActualState
     return PartActualState(
         part_id=a.part_id,
         part_name=a.part_name,
-        region=a.region,
+        part_category=a.part_category,
         side=a.side,
         status=best_status,
         damage_level=best_level,

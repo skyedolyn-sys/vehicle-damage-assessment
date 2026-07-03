@@ -189,13 +189,10 @@ def _llm_dict_to_part_actual_state(
         damage_types = [str(t) for t in raw_types if t]
 
     # 处理 evidence_photo(s)
-    evidence_photos: List[str] = []
-    raw_photos = data.get("evidence_photo", data.get("evidence_photos", []))
-    if isinstance(raw_photos, str):
-        if raw_photos:
-            evidence_photos = [p.strip() for p in raw_photos.split(",") if p.strip()]
-    elif isinstance(raw_photos, list):
-        evidence_photos = [str(p) for p in raw_photos if p]
+    from agents.evidence_photo import to_photo_list
+    evidence_photos: List[str] = to_photo_list(
+        data.get("evidence_photo", data.get("evidence_photos", []))
+    )
 
     # 推断 actual_visible / actual_present
     actual_visible = data.get("actual_visible", len(evidence_photos) > 0)
@@ -204,7 +201,7 @@ def _llm_dict_to_part_actual_state(
     return PartActualState(
         part_id=data.get("part_id", ""),
         part_name=data.get("part_name", ""),
-        region=region,
+        part_category=region,
         side=data.get("side", ""),
         status=status,
         damage_level=damage_level,
@@ -417,7 +414,7 @@ def _build_empty_topology_result(
         states.append(PartActualState.from_region_part(
             part_id=node.part_id,
             part_name=node.node_name,
-            region=region,
+            part_category=region,
             side=node.side,
             status=Status.UNCERTAIN,
             damage_level=DamageLevel.UNKNOWN,
@@ -470,7 +467,7 @@ def _convert_to_topology_result(
             states.append(PartActualState.from_region_part(
                 part_id=node.part_id,
                 part_name=node.node_name,
-                region=region,
+                part_category=region,
                 side=node.side,
                 status=Status.UNCERTAIN,
                 damage_level=DamageLevel.UNKNOWN,

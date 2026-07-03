@@ -1,0 +1,28 @@
+# Central damage_type allow-list used by vision_subagent validation.
+# Keys must align with what vision_subagent prompts ask the LLM to emit.
+default:
+  allowed:
+    - crack
+    - deformation
+    - tear
+    - missing
+    - paint_damage
+    - glass_breakage
+    - sunroof_damage
+    - airbag_deployed
+    - scratch
+    - dent
+    - none
+  default: none
+  aliases:
+    broken: glass_breakage
+    shattered: glass_breakage
+    crumpled: deformation
+    crumpled_metal: deformation
+    cracked: crack
+    broken_glass: glass_breakage
+    chipped: crack
+    gouge: scratch
+    ding: dent
+
+by_vehicle_type: {}

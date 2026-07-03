@@ -7,6 +7,86 @@
 # as used by assessment_orchestrator/planner_agent.  Short aliases such as
 # "left" or "front_left" are NOT matched at runtime.
 default:
+  # Per-part view priority table used by evidence_fusion.  Lower number =
+  # more authoritative canonical view.  priority 99 = effectively invisible.
+  # Must agree with primary_view and view_weights.primary (priority 0 set).
+  part_view_priority:
+    windshield_front:
+      front: 0
+      front_left_45: 1
+      front_right_45: 1
+      rear: 99
+      rear_left_45: 99
+      rear_right_45: 99
+    windshield_rear:
+      rear: 0
+      rear_left_45: 1
+      rear_right_45: 1
+      front: 99
+      front_left_45: 99
+      front_right_45: 99
+    sunroof_glass:
+      top: 0
+      left_90: 2
+      right_90: 2
+      front: 1
+      front_left_45: 1
+      front_right_45: 1
+    roof_front:
+      front: 0
+      front_left_45: 1
+      front_right_45: 1
+    roof_middle:
+      left_90: 0
+      right_90: 0
+      top: 0
+      front: 1
+      rear: 1
+    roof_rear:
+      rear: 0
+      rear_left_45: 1
+      rear_right_45: 1
+    headlight_front_left:
+      front: 0
+      front_left_45: 0
+      left_90: 0
+    headlight_front_right:
+      front: 0
+      front_right_45: 0
+      right_90: 0
+    taillight_rear_left:
+      rear: 0
+      rear_left_45: 0
+      left_90: 0
+    taillight_rear_right:
+      rear: 0
+      rear_right_45: 0
+      right_90: 0
+    mirror_left:
+      left_90: 0
+      front_left_45: 1
+      rear_left_45: 1
+    mirror_right:
+      right_90: 0
+      front_right_45: 1
+      rear_right_45: 1
+    door_front_left:
+      left_90: 0
+      front_left_45: 1
+      rear_left_45: 1
+    door_front_right:
+      right_90: 0
+      front_right_45: 1
+      rear_right_45: 1
+    door_rear_left:
+      left_90: 0
+      rear_left_45: 1
+      front_left_45: 1
+    door_rear_right:
+      right_90: 0
+      rear_right_45: 1
+      front_right_45: 1
+
   primary_view:
     door_front_left:
       - left_90
@@ -21,11 +101,13 @@ default:
     mirror_right:
       - right_90
     roof_front:
-      - top
+      - front
     roof_middle:
       - top
+      - left_90
+      - right_90
     roof_rear:
-      - top
+      - rear
     sunroof_glass:
       - top
     pillar_a_left:
@@ -64,8 +146,8 @@ default:
       primary:
         - right_90
       secondary:
-        - front_right_45
         - rear_right_45
+        - front_right_45
     mirror_left:
       primary:
         - left_90
@@ -80,22 +162,22 @@ default:
         - rear_right_45
     roof_front:
       primary:
-        - top
-      secondary:
         - front
+      secondary:
         - front_left_45
         - front_right_45
     roof_middle:
       primary:
         - top
-      secondary:
         - left_90
         - right_90
+      secondary:
+        - front
+        - rear
     roof_rear:
       primary:
-        - top
-      secondary:
         - rear
+      secondary:
         - rear_left_45
         - rear_right_45
     sunroof_glass:
@@ -108,8 +190,6 @@ default:
         - rear
         - rear_left_45
         - rear_right_45
-        - left_90
-        - right_90
     pillar_a_left:
       primary:
         - front_left_45

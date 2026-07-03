@@ -9,7 +9,7 @@ def test_merge_two_states_takes_worst_status():
     a = PartActualState(
         part_id="hood",
         part_name="引擎盖",
-        region="front",
+        part_category="front",
         side="center",
         status=Status.INTACT,
         damage_level=DamageLevel.NONE,
@@ -18,7 +18,7 @@ def test_merge_two_states_takes_worst_status():
     b = PartActualState(
         part_id="hood",
         part_name="引擎盖",
-        region="front",
+        part_category="front",
         side="center",
         status=Status.DAMAGED,
         damage_level=DamageLevel.MODERATE,
@@ -34,7 +34,7 @@ def test_merge_two_states_missing_wins():
     a = PartActualState(
         part_id="mirror_left",
         part_name="左后视镜",
-        region="left",
+        part_category="left",
         side="front_left",
         status=Status.DAMAGED,
         damage_level=DamageLevel.SEVERE,
@@ -43,7 +43,7 @@ def test_merge_two_states_missing_wins():
     b = PartActualState(
         part_id="mirror_left",
         part_name="左后视镜",
-        region="left",
+        part_category="left",
         side="front_left",
         status=Status.MISSING,
         damage_level=DamageLevel.SEVERE,
@@ -92,7 +92,7 @@ async def test_assessment_orchestrator_integration():
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.INTACT,
                 damage_level=DamageLevel.NONE,
@@ -110,7 +110,7 @@ async def test_assessment_orchestrator_integration():
             PartActualState(
                 part_id="trunk_lid",
                 part_name="后备箱盖",
-                region="rear",
+                part_category="rear",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.SEVERE,

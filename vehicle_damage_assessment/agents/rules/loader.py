@@ -362,6 +362,39 @@ def load_view_weights(vehicle_type: Optional[str] = None) -> Dict[str, Any]:
     return _load_config("view_weights", vehicle_type)
 
 
+def load_part_view_priority(vehicle_type: Optional[str] = None) -> Dict[str, Dict[str, int]]:
+    """Return per-part view priority tables from the rules config.
+
+    Priority 0 = most authoritative canonical view for this part; higher
+    values are less authoritative; 99 = effectively invisible from that
+    angle.  Used by evidence_fusion to decide whether a primary-view
+    intact signal dominates secondary-view damaged signals.
+
+    Sourced from ``view_weights.yaml#part_view_priority`` (default block).
+    """
+    config = _load_config("view_weights", vehicle_type)
+    return {
+        part_id: dict(priorities)
+        for part_id, priorities in config.get("part_view_priority", {}).items()
+    }
+
+
+def load_damage_type_allowlist(vehicle_type: Optional[str] = None) -> Dict[str, Any]:
+    """Return the central damage_type allow-list.
+
+    Returns a dict with three keys:
+      - allowed: list of canonical damage_type strings
+      - default: fallback string when input cannot be normalised
+      - aliases: dict mapping raw LLM-emitted variants to canonical strings
+    """
+    config = _load_config("damage_types", vehicle_type)
+    return {
+        "allowed": list(config.get("allowed", [])),
+        "default": str(config.get("default", "none")),
+        "aliases": dict(config.get("aliases", {})),
+    }
+
+
 def load_threshold(key: str, vehicle_type: Optional[str] = None) -> float:
     """Return a single numeric threshold by key."""
     config = _load_config("thresholds", vehicle_type)

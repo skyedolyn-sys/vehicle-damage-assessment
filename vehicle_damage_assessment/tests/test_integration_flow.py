@@ -55,7 +55,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -67,7 +67,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="bumper_front",
                 part_name="前保险杠",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.LIGHT,
@@ -121,7 +121,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="headlight_front_left",
                 part_name="左前大灯",
-                region="front",
+                part_category="front",
                 side="front_left",
                 status=Status.MISSING,
                 damage_level=DamageLevel.SEVERE,
@@ -130,7 +130,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.SEVERE,
@@ -140,7 +140,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="bumper_front",
                 part_name="前保险杠",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -149,7 +149,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="grille_front",
                 part_name="前格栅",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -179,7 +179,7 @@ class TestIntegrationBuildAndCompare:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.INTACT,
                 damage_level=DamageLevel.NONE,

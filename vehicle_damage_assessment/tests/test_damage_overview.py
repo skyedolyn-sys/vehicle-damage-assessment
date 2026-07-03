@@ -39,7 +39,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -72,7 +72,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -97,7 +97,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="bumper_rear",
                 part_name="后保险杠",
-                region="rear",
+                part_category="rear",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -122,7 +122,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="headlight_front_left",
                 part_name="左前大灯",
-                region="front",
+                part_category="front",
                 side="front_left",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -132,7 +132,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="headlight_front_right",
                 part_name="右前大灯",
-                region="front",
+                part_category="front",
                 side="front_right",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.MODERATE,
@@ -158,7 +158,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="headlight_front_left",
                 part_name="左前大灯",
-                region="front",
+                part_category="front",
                 side="front_left",
                 status=Status.MISSING,
                 damage_level=DamageLevel.SEVERE,
@@ -184,7 +184,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="roof_front",
                 part_name="车顶前部",
-                region="roof",
+                part_category="roof",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.SEVERE,
@@ -209,7 +209,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.LIGHT,
@@ -236,7 +236,7 @@ class TestGenerateDamageOverview:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.INTACT,
                 damage_level=DamageLevel.NONE,
@@ -265,7 +265,7 @@ class TestPhotoTypeEvidenceNote:
             PartActualState(
                 part_id="hood",
                 part_name="引擎盖",
-                region="front",
+                part_category="front",
                 side="center",
                 status=Status.DAMAGED,
                 damage_level=DamageLevel.SEVERE,

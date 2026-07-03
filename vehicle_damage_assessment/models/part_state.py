@@ -29,11 +29,17 @@ class DamageLevel(str, Enum):
 
 @dataclass
 class PartActualState:
-    """Actual state of a single part, compared against the standard topology."""
+    """Actual state of a single part, compared against the standard topology.
+
+    ``part_category`` is the vehicle-level region this part belongs to
+    (``"front"`` / ``"rear"`` / ``"left"`` / ``"right"`` / ``"roof"``).  It is
+    named to match the on-wire JSON key emitted by :meth:`to_dict` and
+    :meth:`to_legacy_dict` and the field name in :data:`config.PARTS_CATALOG`.
+    """
 
     part_id: str
     part_name: str
-    region: str
+    part_category: str
     side: str
 
     # Comparison result
@@ -53,50 +59,49 @@ class PartActualState:
     photo_type: str = "unknown"
     evidence_sources: List[Dict[str, Any]] = field(default_factory=list)
 
-    def to_legacy_dict(self) -> Dict[str, Any]:
-        """Return a flat dict compatible with the old synthesizer / output_validator format.
+    def to_dict(self) -> Dict[str, Any]:
+        """Standard dict serialization (frontend format).
 
-        Keys: part_id, part_name, part_category, side, status, damage_level,
-              damage_type, confidence, evidence_photo, notes
-        """
-        damage_type_str = (
-            ", ".join(self.damage_types) if self.damage_types else "none"
-        )
-        evidence_photo_str = (
-            ", ".join(self.evidence_photos) if self.evidence_photos else ""
-        )
-        return {
-            "part_id": self.part_id,
-            "part_name": self.part_name,
-            "part_category": self.region,
-            "side": self.side,
-            "status": self.status.value,
-            "damage_level": self.damage_level.value,
-            "damage_type": damage_type_str,
-            "confidence": self.confidence,
-            "evidence_photo": evidence_photo_str,
-            "notes": self.notes,
-        }
-
-    def to_frontend_dict(self) -> Dict[str, Any]:
-        """Return a frontend-friendly dict with arrays for multi-value fields.
-
-        The existing index.html calls ``.join(', ')`` on ``evidence_photo`` and
-        ``damage_type``, so these are returned as lists.  ``damage_type`` uses
-        ``["none"]`` for intact parts so the column is never empty.
+        ``damage_type`` and ``evidence_photo`` are always lists.  When the
+        value is missing, ``damage_type`` is ``["none"]`` (so the column is
+        never empty in the UI) and ``evidence_photo`` is ``[]``.
         """
         damage_type_list = list(self.damage_types) if self.damage_types else ["none"]
         evidence_photo_list = list(self.evidence_photos) if self.evidence_photos else []
         return {
             "part_id": self.part_id,
             "part_name": self.part_name,
-            "part_category": self.region,
+            "part_category": self.part_category,
             "side": self.side,
             "status": self.status.value,
             "damage_level": self.damage_level.value,
             "damage_type": damage_type_list,
             "confidence": self.confidence,
             "evidence_photo": evidence_photo_list,
+            "notes": self.notes,
+        }
+
+    def to_legacy_dict(self) -> Dict[str, Any]:
+        """Return a flat dict compatible with the old synthesizer / output_validator format.
+
+        Keys: part_id, part_name, part_category, side, status, damage_level,
+              damage_type, confidence, evidence_photo, notes
+        ``damage_type`` is a comma-separated string; ``evidence_photo`` is a
+        comma-separated string.  Use :meth:`to_dict` for the list-based
+        frontend format.
+        """
+        damage_type_str = ", ".join(self.damage_types) if self.damage_types else "none"
+        evidence_photo_str = ", ".join(self.evidence_photos) if self.evidence_photos else ""
+        return {
+            "part_id": self.part_id,
+            "part_name": self.part_name,
+            "part_category": self.part_category,
+            "side": self.side,
+            "status": self.status.value,
+            "damage_level": self.damage_level.value,
+            "damage_type": damage_type_str,
+            "confidence": self.confidence,
+            "evidence_photo": evidence_photo_str,
             "notes": self.notes,
         }
 
@@ -139,7 +144,7 @@ class PartActualState:
         return cls(
             part_id=data.get("part_id", ""),
             part_name=data.get("part_name", ""),
-            region=data.get("part_category", ""),
+            part_category=data.get("part_category", ""),
             side=data.get("side", ""),
             status=status,
             damage_level=damage_level,
@@ -156,16 +161,21 @@ class PartActualState:
         cls,
         part_id: str,
         part_name: str,
-        region: str,
+        part_category: str,
         side: str,
         status: Status = Status.UNCERTAIN,
         damage_level: DamageLevel = DamageLevel.UNKNOWN,
     ) -> PartActualState:
-        """Factory for creating a PartActualState from region-part info."""
+        """Factory for creating a PartActualState from a topology node.
+
+        ``part_category`` is the vehicle-level region (``"front"`` / ``"rear"``
+        / ``"left"`` / ``"right"`` / ``"roof"``) inherited from the source
+        :class:`models.topology.TopologyNode`.
+        """
         return cls(
             part_id=part_id,
             part_name=part_name,
-            region=region,
+            part_category=part_category,
             side=side,
             status=status,
             damage_level=damage_level,

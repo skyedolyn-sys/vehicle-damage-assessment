@@ -97,7 +97,6 @@ def test_dp8_reviewer_deterministic():
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_dp2_vin_deterministic():
     """DP-2: auxiliary_info_extractor 不再调 LLM。"""
     import inspect

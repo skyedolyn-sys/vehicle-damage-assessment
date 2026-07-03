@@ -119,7 +119,7 @@ async def reviewer_subagent(
             PartActualState(
                 part_id=p["part_id"],
                 part_name=PARTS_BY_ID.get(p["part_id"], {}).get("part_name", p["part_id"]),
-                region=PARTS_BY_ID.get(p["part_id"], {}).get("part_category", ""),
+                part_category=PARTS_BY_ID.get(p["part_id"], {}).get("part_category", ""),
                 side=PARTS_BY_ID.get(p["part_id"], {}).get("side", ""),
                 status=Status(p.get("status", "uncertain")),
                 damage_level=DamageLevel(p.get("damage_level", "unknown")),

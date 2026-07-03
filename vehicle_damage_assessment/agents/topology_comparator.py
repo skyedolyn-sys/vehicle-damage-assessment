@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from agents.rules import load_part_profile, load_region_units, load_view_weights
 from agents.view_mapping import canonicalize_view_id
+from agents._policy_logger import log_policy_conflict  # §4.3
 from config import PARTS_BY_ID
 from models.assessment import DamageAssessment, StructuralDamagePattern
 from models.part_state import DamageLevel, PartActualState, Status
@@ -330,6 +331,13 @@ class TopologyConsistencyEnforcer:
             if severe_neighbors:
                 primary_regions = {canonicalize_view_id(v) for v in _VIEW_WEIGHTS.get(part.part_id, {}).get("primary", [])}
                 if not _has_source_status(new_part, "intact", primary_regions):
+                    # DAMAGE_RECOGNITION_POLICY §4.3 — log structural propagation.
+                    log_policy_conflict(
+                        part_id=part.part_id,
+                        final_status="damaged",
+                        conflict_sources=severe_neighbors,
+                        rule_applied="topology_rule_9",
+                    )
                     new_part = _set_damaged_severe(
                         new_part,
                         "deformation",
@@ -502,7 +510,7 @@ class TopologyComparator:
         return PartActualState(
             part_id=node_id,
             part_name=part_info.get("part_name", node.node_name),
-            region=node.region,
+            part_category=node.region,
             side=node.side,
             status=Status.UNCERTAIN,
             damage_level=DamageLevel.UNKNOWN,
@@ -710,7 +718,7 @@ class TopologyComparator:
             weight = _DAMAGE_WEIGHTS.get(part.damage_level.value, 0)
             if weight == 0:
                 continue
-            region_scores[part.region] = region_scores.get(part.region, 0) + weight
+            region_scores[part.part_category] = region_scores.get(part.part_category, 0) + weight
 
         if not region_scores:
             return "multiple"

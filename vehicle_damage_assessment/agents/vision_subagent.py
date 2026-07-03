@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
 from agents.rules import render_prompt_template
@@ -238,6 +238,135 @@ def _build_checklist_text(checklist: List[Dict[str, str]], view_id: str) -> str:
     return "\n".join(lines) if lines else "（本次视角无强制检查的外部部件清单）"
 
 
+#: High-sensitivity parts (mirrors evidence_fusion._HIGH_SENSITIVITY_PARTS).
+#: Per DAMAGE_RECOGNITION_POLICY §2.1, marking any of these ``intact`` requires
+#: a positive evidence phrase in the notes field.
+_HIGH_SENSITIVITY_PARTS: Set[str] = {
+    "windshield_front", "windshield_rear", "sunroof_glass",
+    "roof_front", "roof_middle", "roof_rear",
+    "pillar_a_left", "pillar_a_right",
+    "pillar_b_left", "pillar_b_right",
+    "pillar_c_left", "pillar_c_right",
+    "hood", "trunk_lid",
+}
+
+#: Accepted positive evidence phrases per category (from policy §2.1).
+_POSITIVE_ANCHORS: Dict[str, List[str]] = {
+    "windshield": ["玻璃面平整无裂纹", "无破碎", "玻璃与车架密封条完整", "玻璃完整"],
+    "roof": ["钣金平整", "行李架对齐", "天窗框架无错位", "车顶线条连续", "车顶钣金平整", "面板完整"],
+    "pillar": ["立柱直线无弯折", "与车顶/车门接缝齐平", "漆面连续", "立柱无变形", "立柱笔直"],
+    "hood": ["钣金弧线连续", "与两侧翼子板接缝齐平", "漆面无裂纹", "弧线连续"],
+    "trunk": ["钣金弧线连续", "与两侧翼子板接缝齐平", "漆面无裂纹", "弧线连续"],
+}
+
+
+def _positive_anchor_category(part_id: str) -> str:
+    """Map a high-sensitivity part_id to its anchor category, or '' if not high-sensitivity."""
+    if part_id.startswith("windshield") or part_id == "sunroof_glass":
+        return "windshield"
+    if part_id.startswith("roof"):
+        return "roof"
+    if part_id.startswith("pillar"):
+        return "pillar"
+    if part_id == "hood":
+        return "hood"
+    if part_id == "trunk_lid":
+        return "trunk"
+    return ""
+
+
+def _check_positive_anchor(part_id: str, status: str, notes: str) -> bool:
+    """Return True if intact high-sensitivity parts have a positive evidence phrase.
+
+    Implements DAMAGE_RECOGNITION_POLICY §2.1 in the Python validation layer.
+    """
+    if status != "intact":
+        return True
+    if part_id not in _HIGH_SENSITIVITY_PARTS:
+        return True
+    category = _positive_anchor_category(part_id)
+    if not category:
+        return True
+    notes_low = (notes or "").lower()
+    return any(anchor.lower() in notes_low for anchor in _POSITIVE_ANCHORS[category])
+
+
+def _enforce_positive_anchor(part_dict: Dict[str, Any]) -> None:
+    """Downgrade intact high-sensitivity parts lacking positive anchor to uncertain.
+
+    Per DAMAGE_RECOGNITION_POLICY §2.4, the Python validation layer is the last
+    line of defense when the LLM fails to provide a positive evidence phrase.
+    Mutates ``part_dict`` in place so downstream code picks up the downgraded state.
+    """
+    part_id = part_dict.get("part_id", "")
+    status = part_dict.get("status", "uncertain")
+    notes = part_dict.get("notes", "")
+    if not _check_positive_anchor(part_id, status, notes):
+        logger.info(
+            "[vision] positive-anchor downgrade: %s status=%s → uncertain (notes=%r)",
+            part_id, status, (notes or "")[:60],
+        )
+        part_dict["status"] = "uncertain"
+        part_dict["damage_level"] = "unknown"
+        prefix = "；缺少正向证据,已按政策 §2.1 降级为 uncertain"
+        if notes:
+            part_dict["notes"] = f"{notes}{prefix}"
+        else:
+            part_dict["notes"] = prefix.lstrip("；")
+        part_dict["_positive_anchor_downgraded"] = True
+
+
+def _should_downgrade_edge_visible(part_id: str, part_dict: Dict[str, Any]) -> bool:
+    """Return True if a high-sensitivity intact part is only edge-visible.
+
+    DAMAGE_RECOGNITION_POLICY §2.2: 仅边缘可见(占比 < 30%)且无明显损伤痕迹时,
+    必须标 uncertain。Python 层启发式:
+    - 仅 high-sensitivity 部件受影响
+    - 仅 intact 状态受影响
+    - close_up_damage 表明聚焦,允许 intact(主体可见)
+    - high confidence 表明 LLM 已观察足够多,不降级
+    - 其他情况(wide_shot/close_up_detail/unknown + low/medium confidence)→ 降级
+    """
+    if part_id not in _HIGH_SENSITIVITY_PARTS:
+        return False
+    if part_dict.get("status") != "intact":
+        return False
+    photo_type = part_dict.get("photo_type", "unknown")
+    if photo_type == "close_up_damage":
+        return False  # 特写聚焦,允许 intact
+    confidence = part_dict.get("confidence", "low")
+    if confidence == "high":
+        return False  # high confidence + intact 通常有足够证据
+    return True
+
+
+def _enforce_edge_visible(part_dict: Dict[str, Any]) -> None:
+    """Downgrade intact high-sensitivity parts only seen at edge to uncertain.
+
+    Implements DAMAGE_RECOGNITION_POLICY §2.2 in the Python validation layer.
+    Should run after ``_enforce_positive_anchor`` since §2.1 already downgrades
+    some intact → uncertain, eliminating the need for §2.2 to consider them.
+    """
+    part_id = part_dict.get("part_id", "")
+    # §2.1 已降级的部件无需再走 §2.2
+    if part_dict.get("_positive_anchor_downgraded"):
+        return
+    if not _should_downgrade_edge_visible(part_id, part_dict):
+        return
+    evidence_photos = _parse_string_or_list(part_dict.get("evidence_photo", []))
+    logger.info(
+        "[vision] edge-visible downgrade: %s photos=%d photo_type=%s confidence=%s → uncertain",
+        part_id, len(evidence_photos),
+        part_dict.get("photo_type", "unknown"), part_dict.get("confidence", "low"),
+    )
+    part_dict["status"] = "uncertain"
+    part_dict["damage_level"] = "unknown"
+    prefix = "；仅边缘可见(≤1 张证据照片),已按政策 §2.2 降级为 uncertain"
+    existing = part_dict.get("notes", "")
+    part_dict["notes"] = f"{existing}{prefix}" if existing else prefix.lstrip("；")
+    part_dict["_edge_visible_downgraded"] = True
+
+
 def _make_uncertain_part(
     item: Dict[str, str],
     photo_ids: List[str],
@@ -256,7 +385,7 @@ def _make_uncertain_part(
             return PartActualState(
                 part_id=item["part_id"],
                 part_name=item["part_name"],
-                region=item["region"],
+                part_category=item["region"],
                 side="",
                 status=Status.INTACT,
                 damage_level=DamageLevel.NONE,
@@ -274,7 +403,7 @@ def _make_uncertain_part(
     return PartActualState(
         part_id=item["part_id"],
         part_name=item["part_name"],
-        region=item["region"],
+        part_category=item["region"],
         side="",
         status=Status.UNCERTAIN,
         damage_level=DamageLevel.UNKNOWN,
@@ -291,12 +420,66 @@ def _make_uncertain_part(
 
 
 def _parse_string_or_list(raw: Any, sep: str = ",") -> List[str]:
-    """Normalize a string-or-list field from the LLM into a list of strings."""
+    """Normalize a string-or-list field from the LLM into a list of strings.
+
+    Thin wrapper that delegates the shape-conversion work to the canonical
+    :func:`agents.evidence_photo.to_photo_list`. The ``sep`` parameter is
+    retained for backwards compatibility; only ``","`` is exercised today.
+    """
+    from agents.evidence_photo import to_photo_list
+    if sep != ",":
+        # Fallback for any future non-comma callers: replicate the legacy
+        # split-by-arbitrary-separator behaviour without going through the
+        # canonical helper (which is comma-specific by contract).
+        if isinstance(raw, str):
+            if not raw or raw.strip().lower() == "none":
+                return []
+            return [x.strip() for x in raw.split(sep) if x.strip()]
+        return [str(x).strip() for x in raw if x is not None and str(x).strip()]
+    return to_photo_list(raw)
+
+
+def _normalise_damage_types(raw: Any) -> List[str]:
+    """Return a canonical damage_type list, validating against the central allow-list.
+
+    Accepts:
+      - None / "" / "none" / [] → ["none"]
+      - str (single value, may be whitespace, may be csv "a, b, c")
+      - list/tuple of strings (may contain aliases or unknown values)
+
+    Applies alias mapping first, then allow-list filter. Unknown values
+    fall back to the configured default. Empty result becomes ["none"].
+    """
+    from agents.rules import load_damage_type_allowlist
+
+    allowlist = load_damage_type_allowlist()
+    allowed = set(allowlist["allowed"])
+    default = allowlist["default"]
+    aliases = allowlist["aliases"]
+
+    if raw is None:
+        return [default]
     if isinstance(raw, str):
-        if not raw or raw == "none":
-            return []
-        return [x.strip() for x in raw.split(sep) if x.strip()]
-    return [str(x) for x in raw if x]
+        raw = [t.strip() for t in raw.split(",") if t.strip()]
+    if not isinstance(raw, (list, tuple)):
+        return [default]
+    out: List[str] = []
+    for item in raw:
+        if item is None:
+            continue
+        s = str(item).strip().lower()
+        if not s:
+            continue
+        canonical = aliases.get(s, s)
+        if canonical in allowed:
+            if canonical not in out:
+                out.append(canonical)
+        else:
+            if default not in out:
+                out.append(default)
+    if not out:
+        return [default]
+    return out
 
 
 def _resolve_photo_type(evidence_photos: List[str], photo_type_lookup: Dict[str, str]) -> str:
@@ -312,9 +495,19 @@ def _resolve_photo_type(evidence_photos: List[str], photo_type_lookup: Dict[str,
 
 
 def _llm_dict_to_part_actual_state(
-    data: Dict[str, Any], region: str, photo_type: str = "unknown"
+    data: Dict[str, Any],
+    region: str,
+    photo_type: str = "unknown",
+    view_id: str = "",
 ) -> PartActualState:
-    """Convert an LLM dict to PartActualState."""
+    """Convert an LLM dict to PartActualState.
+
+    The ``region`` argument is the topology part_category (e.g. "front").
+    The optional ``view_id`` argument records the camera angle that produced
+    this observation (e.g. "front_left_45").  Both are written into the
+    evidence_source dict using their semantic names so downstream consumers
+    can compare against the right reference set (view_id vs part_category).
+    """
     status_str = data.get("status", "uncertain")
     damage_level_str = data.get("damage_level", "unknown")
 
@@ -331,25 +524,27 @@ def _llm_dict_to_part_actual_state(
         except ValueError:
             damage_level = DamageLevel.UNKNOWN
 
-    damage_types = _parse_string_or_list(data.get("damage_type", data.get("damage_types", [])))
+    damage_types = _normalise_damage_types(data.get("damage_type", data.get("damage_types", [])))
     evidence_photos = _parse_string_or_list(data.get("evidence_photo", data.get("evidence_photos", [])))
 
     actual_visible = data.get("actual_visible", len(evidence_photos) > 0)
     actual_present = data.get("actual_present", status != Status.MISSING)
 
     evidence_source = {
-        "region": region,
+        "view_id": view_id,
+        "part_category": region,
         "status": status.value,
         "damage_level": damage_level.value,
         "confidence": data.get("confidence", "low"),
         "evidence_photo": evidence_photos,
         "notes": data.get("notes", ""),
+        "photo_type": photo_type,
     }
 
     return PartActualState(
         part_id=data.get("part_id", ""),
         part_name=data.get("part_name", ""),
-        region=region,
+        part_category=region,
         side=data.get("side", ""),
         status=status,
         damage_level=damage_level,
@@ -450,13 +645,13 @@ async def vision_subagent(
         seen_ids.add(part_id)
         part_dict["part_id"] = part_id
 
-        # Enrich region/side/part_name from topology/PARTS_BY_ID
+        # Enrich part_category/side/part_name from topology/PARTS_BY_ID
         if part_id in PARTS_BY_ID:
             part_dict.setdefault("part_name", PARTS_BY_ID[part_id]["part_name"])
         if topology:
             node = topology.get_node(part_id)
             if node:
-                part_dict.setdefault("region", node.region)
+                part_dict.setdefault("part_category", node.region)
                 part_dict.setdefault("side", node.side)
 
         evidence_photos = _parse_string_or_list(part_dict.get("evidence_photo", part_dict.get("evidence_photos", [])))
@@ -464,11 +659,20 @@ async def vision_subagent(
         photo_type = _resolve_photo_type(evidence_photos, photo_type_lookup)
         part_dict["photo_type"] = photo_type
 
+        # DAMAGE_RECOGNITION_POLICY §2.4: Python 校验层强制降级缺正向证据短语的高敏感部件。
+        # 必须在 _llm_dict_to_part_actual_state 之前调用,使 PartActualState 继承降级后结论。
+        _enforce_positive_anchor(part_dict)
+        # DAMAGE_RECOGNITION_POLICY §2.2: 仅边缘可见的高敏感部件也强制降级。
+        _enforce_edge_visible(part_dict)
+
         state = _llm_dict_to_part_actual_state(
-            part_dict, part_dict.get("region", ""), photo_type=photo_type
+            part_dict,
+            part_dict.get("part_category", ""),
+            photo_type=photo_type,
+            view_id=view_id,
         )
         part_actual_states.append(state)
-        parts.append(state.to_legacy_dict())
+        parts.append(state.to_dict())
 
     # Backfill any checklist items the LLM omitted so callers always get a
     # complete, predictable set of parts for this view.  Use the concrete states
@@ -483,7 +687,7 @@ async def vision_subagent(
             continue
         state = _make_uncertain_part(item, photo_ids, concrete_states)
         part_actual_states.append(state)
-        parts.append(state.to_legacy_dict())
+        parts.append(state.to_dict())
         seen_ids.add(item["part_id"])
         logger.info("[vision:%s] backfilled %s as %s", view_id, item["part_id"], state.status.value)
 

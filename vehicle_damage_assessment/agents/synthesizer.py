@@ -10,6 +10,7 @@ from agents.rules import (
     load_view_weights,
 )
 from agents.view_mapping import canonicalize_view_id
+from agents._policy_logger import log_policy_conflict  # §4.3
 
 
 _PRIORITIES = load_priority_map()
@@ -55,11 +56,13 @@ SPILL_OVER_PRONE_PARTS = load_part_profile("spill_over_prone")
 
 
 def _extract_evidence_photos(candidate: Dict[str, Any]) -> List[str]:
-    """Extract evidence photo ids from a candidate, handling string or list."""
-    raw_photos = candidate.get("evidence_photo", [])
-    if isinstance(raw_photos, str):
-        raw_photos = [p.strip() for p in raw_photos.split(",") if p.strip()] if raw_photos else []
-    return list(dict.fromkeys(p for p in raw_photos if p))
+    """Extract evidence photo ids from a candidate, handling string or list.
+
+    Delegates the shape conversion to the canonical normaliser and then
+    preserves order while deduplicating (this was the prior local behaviour).
+    """
+    from agents.evidence_photo import to_photo_list
+    return list(dict.fromkeys(to_photo_list(candidate.get("evidence_photo", []))))
 
 
 def _has_photo_coverage_for_part(part_id: str, region_results: List[Dict[str, Any]]) -> bool:
@@ -402,19 +405,22 @@ def _downgrade_level(level: str) -> str:
     return {"severe": "moderate", "moderate": "light"}.get(level, level)
 
 
-def _append_note(part: Dict[str, Any], note: str) -> None:
-    """Append a note to a part dict, preserving existing notes."""
-    existing = part.get("notes", "")
-    part["notes"] = f"{existing}；{note}" if existing else note
+def _append_note(part: Dict[str, Any], note: str) -> Dict[str, Any]:
+    """Return a new part dict with note appended to the existing notes."""
+    new_part = dict(part)
+    existing = new_part.get("notes", "")
+    new_part["notes"] = f"{existing}；{note}" if existing else note
+    return new_part
 
 
-def _set_damaged_severe(part: Dict[str, Any], damage_type: str, note: str) -> None:
-    """Mutate a part dict to a consistent damaged-severe conclusion."""
-    part["status"] = "damaged"
-    part["damage_level"] = "severe"
-    part["damage_type"] = [damage_type]
-    part["confidence"] = "low"
-    _append_note(part, note)
+def _set_damaged_severe(part: Dict[str, Any], damage_type: str, note: str) -> Dict[str, Any]:
+    """Return a new part dict with damaged-severe conclusion and note appended."""
+    new_part = dict(part)
+    new_part["status"] = "damaged"
+    new_part["damage_level"] = "severe"
+    new_part["damage_type"] = [damage_type]
+    new_part["confidence"] = "low"
+    return _append_note(new_part, note)
 
 
 def _severe_neighbors(
@@ -507,9 +513,16 @@ def _apply_adjacency_rules(
                 if current_level in ("moderate", "light"):
                     new_level = _downgrade_level(current_level)
                     new_part["damage_level"] = new_level
-                    _append_note(
+                    new_part = _append_note(
                         new_part,
                         f"前部部件从单一/低置信度视角判损，且相邻后部严重受损，疑似误检，级别从 {current_level} 降至 {new_level}",
+                    )
+                    # DAMAGE_RECOGNITION_POLICY §4.3 — log the conflict.
+                    log_policy_conflict(
+                        part_id=part_id,
+                        final_status=new_part.get("status", "uncertain"),
+                        conflict_sources=severe_neighbors,
+                        rule_applied="adjacency_rule_4",
                     )
                 # Also cap confidence to low when the only evidence is low/medium.
                 if new_part.get("confidence") == "medium":
@@ -523,15 +536,22 @@ def _apply_adjacency_rules(
             and new_part.get("damage_level") == "severe"
         ):
             evidence_regions = {
-                canonicalize_view_id(src.get("region", "")) for src in new_part.get("evidence_sources", [])
+                canonicalize_view_id(src.get("view_id", "")) for src in new_part.get("evidence_sources", [])
                 if src.get("status") == "damaged"
             }
             primary = {canonicalize_view_id(v) for v in VIEW_WEIGHTS.get(part_id, {}).get("primary", [])}
             if primary and not any(r in primary for r in evidence_regions):
                 new_part["damage_level"] = "moderate"
-                _append_note(
+                new_part = _append_note(
                     new_part,
                     f"{part_id} 从非主视角单源判为 severe，易受相邻严重损伤传染，降级为 moderate",
+                )
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log the conflict.
+                log_policy_conflict(
+                    part_id=part_id,
+                    final_status=new_part.get("status", "uncertain"),
+                    conflict_sources=sorted(evidence_regions),
+                    rule_applied="adjacency_rule_5",
                 )
 
         # Rule 6: doors damaged solely from diagonal (non-side) views are often
@@ -543,7 +563,7 @@ def _apply_adjacency_rules(
             and new_part.get("status") == "damaged"
         ):
             evidence_regions = {
-                canonicalize_view_id(src.get("region", "")) for src in new_part.get("evidence_sources", [])
+                canonicalize_view_id(src.get("view_id", "")) for src in new_part.get("evidence_sources", [])
                 if src.get("status") == "damaged"
             }
             primary_regions = {canonicalize_view_id(v) for v in VIEW_WEIGHTS.get(part_id, {}).get("primary", set())}
@@ -558,16 +578,26 @@ def _apply_adjacency_rules(
                 if severe_adjacent_fenders:
                     # DAMAGE_RECOGNITION_POLICY §3.4: 仅当 door 没有 primary 视角证据时,
                     # 且没有任何 primary 视角报告该门 damaged 时才允许翻 intact。
+                    flipped_to_intact = False
                     if severe_adjacent_fenders and not _has_primary_damage_signal(new_part):
                         new_part["status"] = "intact"
                         new_part["_adjacency_override"] = True
+                        flipped_to_intact = True
                     new_part["damage_level"] = "none"
                     new_part["damage_type"] = []
                     new_part["confidence"] = "low"
-                    _append_note(
+                    new_part = _append_note(
                         new_part,
                         f"车门损伤证据仅来自斜向视角，且相邻翼子板严重受损（{', '.join(severe_adjacent_fenders)}），判定为相邻损伤的视觉延伸，改为 intact",
                     )
+                    if flipped_to_intact:
+                        # DAMAGE_RECOGNITION_POLICY §4.3 — log the conflict.
+                        log_policy_conflict(
+                            part_id=part_id,
+                            final_status="intact",
+                            conflict_sources=severe_adjacent_fenders,
+                            rule_applied="adjacency_rule_6",
+                        )
 
         # Rule 7: rear taillights that are marked intact from a single source but
         # are surrounded by severe rear-structure damage are likely destroyed or
@@ -582,7 +612,7 @@ def _apply_adjacency_rules(
             allowed = REAR_CORE_STRUCTURAL_PARTS | {f"fender_rear_{side}"}
             severe_rear_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
             if severe_rear_neighbors:
-                _set_damaged_severe(
+                new_part = _set_damaged_severe(
                     new_part,
                     "missing",
                     f"尾灯仅从单一斜向/侧向视角判为 intact，但相邻后部结构严重受损（{', '.join(severe_rear_neighbors)}），尾灯不可能独善其身，修正为 damaged severe",
@@ -610,11 +640,18 @@ def _apply_adjacency_rules(
             # primary (side) view.
             primary_regions = {canonicalize_view_id(v) for v in VIEW_WEIGHTS.get(part_id, {}).get("primary", [])}
             has_intact_evidence = any(
-                src.get("status") == "intact" and canonicalize_view_id(src.get("region", "")) in primary_regions
+                src.get("status") == "intact" and canonicalize_view_id(src.get("view_id", "")) in primary_regions
                 for src in new_part.get("evidence_sources", [])
             )
             if not has_intact_evidence:
-                _set_damaged_severe(
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log the conflict.
+                log_policy_conflict(
+                    part_id=part_id,
+                    final_status="damaged",
+                    conflict_sources=severe_rear_neighbors,
+                    rule_applied="adjacency_rule_8",
+                )
+                new_part = _set_damaged_severe(
                     new_part,
                     "deformation",
                     f"该部件从边缘视角无法确认，但相邻后部核心结构严重受损（{', '.join(severe_rear_neighbors)}），推断为 damaged severe",
@@ -798,7 +835,7 @@ def _apply_mirror_fallback(
         new_part["damage_level"] = "none"
         new_part["damage_type"] = []
         new_part["confidence"] = "low"
-        _append_note(new_part, "后视镜无损伤证据，从 conservative 推断为 intact")
+        new_part = _append_note(new_part, "后视镜无损伤证据，从 conservative 推断为 intact")
         updated.append(new_part)
 
     return updated
@@ -831,7 +868,7 @@ def _apply_rear_missing_to_damaged_fallback(
             new_part["status"] = "damaged"
             new_part["damage_level"] = "severe"
             new_part["damage_type"] = [dt for dt in part.get("damage_type", []) if dt != "missing"] or ["deformation"]
-            _append_note(new_part, "存在 damaged 证据，将 missing 回退为 damaged severe")
+            new_part = _append_note(new_part, "存在 damaged 证据，将 missing 回退为 damaged severe")
             updated.append(new_part)
             continue
 

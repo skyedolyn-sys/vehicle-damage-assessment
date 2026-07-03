@@ -362,6 +362,81 @@ def validate_filename_heuristics(
     return errors
 
 
+def validate_damage_types(
+    data: Dict[str, Any],
+    config_name: str = "damage_types",
+    known_parts: Optional[Set[str]] = None,
+    known_vehicle_types: Optional[Set[str]] = None,
+) -> List[str]:
+    """Validate damage_types.yaml.
+
+    Expected structure (under ``default``):
+      allowed: list of canonical damage_type strings
+      default: fallback string (defaults to "none")
+      aliases: dict[str, str] mapping raw variants -> canonical strings
+    """
+    errors: List[str] = []
+
+    if not isinstance(data, dict):
+        errors.append(_error("damage_types", "config must be a mapping"))
+        return errors
+
+    default = data.get("default")
+    if not isinstance(default, dict):
+        errors.append(_error("damage_types.default", "must be a mapping"))
+        return errors
+
+    allowed = default.get("allowed", [])
+    if not isinstance(allowed, list):
+        errors.append(_error("damage_types.default.allowed", "must be a list"))
+    else:
+        for idx, item in enumerate(allowed):
+            if not isinstance(item, str):
+                errors.append(_error(
+                    f"damage_types.default.allowed[{idx}]",
+                    "must be a string",
+                ))
+
+    default_value = default.get("default", "none")
+    if not isinstance(default_value, str):
+        errors.append(_error("damage_types.default.default", "must be a string"))
+
+    aliases = default.get("aliases", {})
+    if not isinstance(aliases, dict):
+        errors.append(_error("damage_types.default.aliases", "must be a mapping"))
+    else:
+        for alias, canonical in aliases.items():
+            if not isinstance(alias, str):
+                errors.append(_error(
+                    f"damage_types.default.aliases.{alias}",
+                    "alias key must be a string",
+                ))
+            if not isinstance(canonical, str):
+                errors.append(_error(
+                    f"damage_types.default.aliases.{alias}",
+                    "canonical value must be a string",
+                ))
+
+    by_vehicle_type = data.get("by_vehicle_type", {})
+    if not isinstance(by_vehicle_type, dict):
+        errors.append(_error("damage_types.by_vehicle_type", "must be a mapping"))
+        return errors
+
+    for vt, vt_config in by_vehicle_type.items():
+        if known_vehicle_types and vt not in known_vehicle_types:
+            errors.append(_error(
+                f"damage_types.by_vehicle_type.{vt}",
+                "unknown vehicle type",
+            ))
+        if not isinstance(vt_config, dict):
+            errors.append(_error(
+                f"damage_types.by_vehicle_type.{vt}",
+                "must be a mapping",
+            ))
+
+    return errors
+
+
 def validate_config(
     config_name: str,
     data: Dict[str, Any],
@@ -397,6 +472,7 @@ def validate_config(
         "checklist_hints": _validate_checklist_hints,
         "region_units": validate_region_units,
         "filename_view_hints": validate_filename_view_hints,
+        "damage_types": validate_damage_types,
     }
 
     validator = validators.get(config_name)

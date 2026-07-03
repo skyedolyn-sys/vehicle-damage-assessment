@@ -22,6 +22,8 @@ from typing import Any, Dict, List, Set, Tuple
 from config import PARTS_BY_ID
 from models.part_state import DamageLevel, Status
 
+from agents.rules import load_part_view_priority
+
 
 #: Parts that should benefit from cross-view evidence fusion.  These are
 #: safety-critical or structural parts whose damage should not be hidden by a
@@ -79,60 +81,8 @@ _VIEW_REGION_TAG: Dict[str, str] = {
 
 
 #: View priorities for each critical part: lower number = more authoritative.
-_PART_VIEW_PRIORITY: Dict[str, Dict[str, int]] = {
-    "windshield_front": {
-        "front": 0, "front_left_45": 1, "front_right_45": 1,
-        "rear": 99, "rear_left_45": 99, "rear_right_45": 99,
-    },
-    "windshield_rear": {
-        "rear": 0, "rear_left_45": 1, "rear_right_45": 1,
-        "front": 99, "front_left_45": 99, "front_right_45": 99,
-    },
-    "sunroof_glass": {
-        "top": 0, "left_90": 2, "right_90": 2,
-        "front": 1, "front_left_45": 1, "front_right_45": 1,
-    },
-    "roof_front": {
-        "front": 0, "front_left_45": 1, "front_right_45": 1,
-    },
-    "roof_middle": {
-        "left_90": 0, "right_90": 0, "top": 0,
-        "front": 1, "rear": 1,
-    },
-    "roof_rear": {
-        "rear": 0, "rear_left_45": 1, "rear_right_45": 1,
-    },
-    "headlight_front_left": {
-        "front": 0, "front_left_45": 0, "left_90": 0,
-    },
-    "headlight_front_right": {
-        "front": 0, "front_right_45": 0, "right_90": 0,
-    },
-    "taillight_rear_left": {
-        "rear": 0, "rear_left_45": 0, "left_90": 0,
-    },
-    "taillight_rear_right": {
-        "rear": 0, "rear_right_45": 0, "right_90": 0,
-    },
-    "mirror_left": {
-        "left_90": 0, "front_left_45": 1, "rear_left_45": 1,
-    },
-    "mirror_right": {
-        "right_90": 0, "front_right_45": 1, "rear_right_45": 1,
-    },
-    "door_front_left": {
-        "left_90": 0, "front_left_45": 1, "rear_left_45": 1,
-    },
-    "door_front_right": {
-        "right_90": 0, "front_right_45": 1, "rear_right_45": 1,
-    },
-    "door_rear_left": {
-        "left_90": 0, "rear_left_45": 1, "front_left_45": 1,
-    },
-    "door_rear_right": {
-        "right_90": 0, "rear_right_45": 1, "front_right_45": 1,
-    },
-}
+#: Loaded from agents/rules/config/view_weights.yaml#part_view_priority.
+_PART_VIEW_PRIORITY: Dict[str, Dict[str, int]] = load_part_view_priority()
 
 
 def _view_priority(part_id: str, view_id: str) -> int:
@@ -146,19 +96,12 @@ def _view_priority(part_id: str, view_id: str) -> int:
 def _as_photo_list(raw: Any) -> List[str]:
     """Normalize an ``evidence_photo`` field to a list of strings.
 
-    The LLM may emit either a JSON array ``["172852-04.png", "172852-03.png"]``
-    or a comma-separated string.  Without this normalization, iterating a raw
-    string with ``for p in raw`` would walk it character-by-character.
+    Thin backward-compatible alias for :func:`agents.evidence_photo.to_photo_list`.
+    All actual shape-conversion logic lives in that module so we have one
+    canonical normaliser across the codebase.
     """
-    if raw is None:
-        return []
-    if isinstance(raw, str):
-        if not raw or raw == "none":
-            return []
-        return [p.strip() for p in raw.split(",") if p.strip()]
-    if isinstance(raw, (list, tuple)):
-        return [str(p) for p in raw if p]
-    return []
+    from agents.evidence_photo import to_photo_list
+    return to_photo_list(raw)
 
 
 def _has_damage_signal(candidate: Dict[str, Any]) -> bool:
