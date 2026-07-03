@@ -49,6 +49,8 @@ _CRITICAL_FUSION_PARTS: Set[str] = {
     "pillar_b_right",
     "pillar_c_left",
     "pillar_c_right",
+    "hood",
+    "trunk_lid",
 }
 
 # DAMAGE_RECOGNITION_POLICY §2.1: 高敏感部件集合——这些部件的 severe 损伤信号必须穿透 primary-intact。

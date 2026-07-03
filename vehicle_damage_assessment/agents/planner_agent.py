@@ -16,9 +16,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+import asyncio
 import logging
 import os
 import re
+import time
 
 from agents.minimax_client import call_minimax, extract_json, build_image_content
 from agents.rules import render_prompt_template
@@ -52,6 +54,26 @@ from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 #: Thumbnail width used by the planner.  Smaller images reduce cost/latency
 #: while preserving enough detail for view classification.
 _PLANNER_THUMB_WIDTH = 384
+
+
+#: 每批发送给 LLM 的最大照片数。32 张照片 → 4 批 × 8 张（用户要求）。
+#: 配合 _PLANNER_BATCH_CONCURRENCY=2，避免 MiniMax 全局并发限流触发
+#: "Server disconnected" 重试。
+_PLANNER_BATCH_SIZE = 8
+
+
+#: 单个 batch 调 LLM 的硬超时（秒）。超时的 batch 把所有照片标记为
+#: unknown，让下游 safety net 兜底；防止 Server disconnected 雪崩
+#: 把单批拖到 200s+ 进而拖垮整次评估。
+_PLANNER_BATCH_TIMEOUT_SEC = 90.0
+
+
+#: Per-batch parallel limit for the planner LLM.
+#: Capped low because MiniMax throttles global concurrency — running 4+ heavy
+#: planner prompts in parallel against the same endpoint reliably triggers
+#: "Server disconnected" retries. 2 keeps us safe without sacrificing the
+#: batching speedup.
+_PLANNER_BATCH_CONCURRENCY = 2
 
 
 def _impacted_parts_for_missing_view(view_id: str) -> List[str]:
@@ -95,6 +117,32 @@ _FILENAME_VIEW_HINTS: List[Tuple[str, str]] = [
     ("仪表盘", "interior"),
     ("中控", "interior"),
     ("后排", "interior"),
+    # DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 2: 把前/后/左/右/顶的关键词扩展进
+    # filename hint,让 planner 在调 LLM 之前就能确定大多数视角。
+    # 注意:45 度角的"前左/前右"这种偏正交的中文表达比较少见,保留为 LLM 任务。
+    ("车头", "front"),
+    ("车前", "front"),
+    ("前部", "front"),
+    ("正面", "front"),
+    ("车尾", "rear"),
+    ("车后", "rear"),
+    ("后部", "rear"),
+    ("背面", "rear"),
+    ("左前", "front_left_45"),
+    ("前左", "front_left_45"),
+    ("右前", "front_right_45"),
+    ("前右", "front_right_45"),
+    ("左后", "rear_left_45"),
+    ("后左", "rear_left_45"),
+    ("右后", "rear_right_45"),
+    ("后右", "rear_right_45"),
+    ("左侧", "left_90"),
+    ("左侧面", "left_90"),
+    ("右侧", "right_90"),
+    ("右侧面", "right_90"),
+    ("顶部", "top"),
+    ("俯视", "top"),
+    ("车顶", "top"),
 ]
 
 
@@ -182,91 +230,112 @@ def _view_hint_from_filename(filename: str) -> str:
     return ""
 
 
-async def _classify_photo_types(
+def _pre_resolve_views_from_filename(
     photos: List[Dict[str, Any]],
-    vehicle_prior: Dict[str, Any],
-) -> Dict[str, str]:
-    """Classify each photo as exterior/interior/auxiliary/unknown.
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Filename hint 优先解析 — 在调 LLM 之前把可确定的 view 预填好。
 
-    First applies filename heuristics, then uses a single lightweight LLM call
-    for photos whose type is not obvious from the filename.
+    DAMAGE_RECOGNITION_POLICY §1.6 (步骤 2): 把 filename hint 前置,LLM 只负责
+    处理真正模糊的照片。这样 LLM 失败时(26% parse 失败率)绝大多数照片已经
+    有正确的 view,不会全部 cascade 到 scene_intake。
+
+    Returns
+    -------
+    (resolved, ambiguous):
+        resolved: 已经能从 filename 推断出 view 的 photo_views 条目
+        ambiguous: 需要 LLM 处理的照片
     """
-    photo_by_id = {p.get("id", ""): p for p in photos if p.get("id")}
-    type_map: Dict[str, str] = {}
-    pending: List[Dict[str, Any]] = []
-
+    resolved: List[Dict[str, Any]] = []
+    ambiguous: List[Dict[str, Any]] = []
     for photo in photos:
         photo_id = photo.get("id", "")
         if not photo_id:
             continue
-        filename_type = _classify_photo_by_filename(photo_id)
-        if filename_type:
-            type_map[photo_id] = filename_type
-            logger.info("[planner] photo %s classified by filename as %s", photo_id, filename_type)
+        hint = _view_hint_from_filename(photo_id)
+        if hint:
+            resolved.append({
+                "photo_id": photo_id,
+                "view_id": hint,
+                "confidence": "high",
+                "reason": "filename_deterministic",
+            })
+            logger.info("[planner] photo %s view resolved from filename as %s", photo_id, hint)
         else:
-            pending.append(photo)
+            ambiguous.append(photo)
+    logger.info(
+        "[planner] filename pre-resolve: %d resolved, %d ambiguous",
+        len(resolved), len(ambiguous),
+    )
+    return resolved, ambiguous
 
-    logger.info("[planner] classify pending count=%d, filename resolved=%d", len(pending), len(type_map))
 
-    if not pending:
-        return type_map
+def _classify_photo_by_signals(photo: Dict[str, Any]) -> str:
+    """确定性 photo_type 分类:文件名 + 长宽比 → exterior/close_up_damage。
 
-    # Limit LLM classification to the first 6 ambiguous photos to control cost.
-    pending = pending[:6]
+    DAMAGE_RECOGNITION_POLICY §1.6: 确定性优先。
+    与 _classify_photo_by_filename 不同,这个会返回 'exterior' 作为兜底,
+    而不是空字符串。设计原则:宁可保守分到 exterior 也不要误判为 interior/auxiliary。
+    """
+    filename = photo.get("id", "") or photo.get("name", "")
+    by_name = _classify_photo_by_filename(filename)
+    if by_name:
+        return by_name
+    # 长宽比极端(竖图或宽图)+ 无文件名辅助信号 → close_up_damage
+    width = photo.get("_decoded_width", 0)
+    height = photo.get("_decoded_height", 0)
+    if width and height:
+        ratio = width / height
+        if ratio < 0.7 or ratio > 1.4:
+            return "close_up_damage"
+    return "exterior"
 
-    system_prompt = """你是车辆照片分类助手。为每张照片判断它属于哪一类：
-- exterior：车身外部照片（车头、车尾、侧面、45度角、车顶等）
-- interior：车内照片（座椅、方向盘、仪表盘、后排空间等）
-- auxiliary：证件、VIN码、铭牌、行驶证、车牌特写等辅助信息照片
-- unknown：无法判断
 
-输出严格 JSON：
-{
-  "classifications": [
-    {"photo_id": "167111-02.png", "photo_type": "exterior", "reason": "车头外观"},
-    {"photo_id": "167111-07.png", "photo_type": "interior", "reason": "车内座椅"}
-  ]
-}
-只输出 JSON，不要额外文字。"""
+def _decode_image_dimensions(photo: Dict[str, Any]) -> Tuple[int, int]:
+    """解码图片宽高,用于确定性分类信号。失败返回 (0, 0)。
 
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": system_prompt},
-        {"type": "text", "text": f"车辆：{vehicle_prior.get('vehicle', '该车')}。共 {len(pending)} 张照片，请逐张分类并输出 JSON。"},
-    ]
-    for photo in pending:
-        content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
-        content.append(_build_image_content(photo, max_width=_PLANNER_THUMB_WIDTH))
-
-    messages = [{"role": "user", "content": content}]
-    raw = ""
+    DAMAGE_RECOGNITION_POLICY §1.6: 用确定性信号替代 LLM 判断 photo_type。
+    """
+    path = photo.get("path", "") or photo.get("url", "")
+    if not path or path.startswith(("http://", "https://")):
+        return 0, 0
     try:
-        raw = await call_minimax(messages, temperature=0.0, max_tokens=2000)
-        logger.info("[planner] classify raw length=%d", len(raw))
-    except Exception as exc:
-        logger.warning("[planner] classify call_minimax failed: %s", exc, exc_info=True)
-        raw = ""
-    result = extract_json(raw) or {}
-    if not isinstance(result, dict):
-        logger.warning("[planner] classify extract_json did not return dict: %s", type(result))
-        result = {}
+        from PIL import Image
+        img = Image.open(path)
+        return img.size  # (width, height)
+    except Exception:
+        return 0, 0
 
-    for item in result.get("classifications", []):
-        if not isinstance(item, dict):
-            continue
-        photo_id = item.get("photo_id", "")
-        photo_type = item.get("photo_type", "unknown").lower()
-        if photo_id and photo_type in PHOTO_TYPE_CATEGORIES:
-            type_map[photo_id] = photo_type
-            logger.info("[planner] photo %s classified by LLM as %s", photo_id, photo_type)
 
-    # Any still-unclassified pending photos default to exterior (safest for damage assessment).
-    for photo in pending:
+async def _classify_photo_types(
+    photos: List[Dict[str, Any]],
+    vehicle_prior: Dict[str, Any],
+) -> Dict[str, str]:
+    """确定性 photo_type 分类:不再调用 LLM(DAMAGE_RECOGNITION_POLICY §1.6)。
+
+    - 文件名有 keyword(auxiliary/interior)→ 强制结论
+    - 长宽比极端(portrait/landscape)且无明确辅助关键词 → close_up_damage
+    - 默认 → exterior
+
+    原 LLM 路径存在 3 个问题:(1) 经常 parse 失败(详见 minimax_client.py 改造);
+    (2) LLM 倾向把"看不清局部"误判为 auxiliary; (3) 26% 全局失败率的主要源头之一。
+    现完全去除 LLM 调用,引入图片宽高作为唯一额外信号。
+    """
+    type_map: Dict[str, str] = {}
+    # 批量注入一次宽高,避免每个 photo 重复打开图片
+    for photo in photos:
+        if "_decoded_width" not in photo:
+            w, h = _decode_image_dimensions(photo)
+            photo["_decoded_width"] = w
+            photo["_decoded_height"] = h
+    for photo in photos:
         photo_id = photo.get("id", "")
-        if photo_id and photo_id not in type_map:
-            type_map[photo_id] = "exterior"
-            logger.info("[planner] photo %s defaulted to exterior", photo_id)
+        if not photo_id:
+            continue
+        photo_type = _classify_photo_by_signals(photo)
+        type_map[photo_id] = photo_type
+        logger.info("[planner] photo %s classified deterministically as %s", photo_id, photo_type)
 
-    logger.info("[planner] final type_map: %s", type_map)
+    logger.info("[planner] deterministic classify done: %s", type_map)
     return type_map
 
 
@@ -456,6 +525,26 @@ async def planner_agent(
     # always empty and the deterministic safety net could not assign views.
     photo_types = await _classify_photo_types(photos, vehicle_prior)
 
+    # DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 2: filename hint 优先。
+    # 大多数照片的 view 可以从文件名(车头/车尾/左侧/右侧/内饰/行驶证/铭牌等)
+    # 直接确定,LLM 只需要处理真正模糊的那些。这样 LLM 26% parse 失败率
+    # 不会导致所有照片 cascade 到 scene_intake。
+    pre_resolved_views, ambiguous_photos = _pre_resolve_views_from_filename(photos)
+    if not ambiguous_photos:
+        # 全部照片都能从 filename 推断 → 直接走 stabilize + augment 流程,不再调 LLM
+        logger.info(
+            "[planner] all %d photos resolved by filename; skipping LLM",
+            len(pre_resolved_views),
+        )
+        stable_plan = _stabilize_plan(pre_resolved_views, photos, photo_types)
+        # 同样走 augment 兜底
+        covered_views = stable_plan.get("workflow_plan", {}).get("priority_views", [])
+        if len(covered_views) < 5:
+            stable_plan = _augment_exterior_coverage(stable_plan, photos, photo_types)
+        return stable_plan
+
+    photos = ambiguous_photos  # 只把模糊照片喂给 LLM
+
     vehicle_name = vehicle_prior.get("vehicle", "该车")
     view_selection_prompt = get_view_selection_prompt()
 
@@ -472,15 +561,26 @@ async def planner_agent(
 
     messages = [{"role": "user", "content": content}]
     raw = ""
+    primary_start = time.monotonic()
     try:
-        raw = await call_minimax(messages, temperature=0.0, max_tokens=4000)
+        raw = await asyncio.wait_for(
+            call_minimax(messages, temperature=0.0, max_tokens=4000),
+            timeout=_PLANNER_BATCH_TIMEOUT_SEC,
+        )
         logger.info("[planner] primary call_minimax raw length=%d", len(raw))
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[planner] primary call_minimax timed out after %.0fs",
+            _PLANNER_BATCH_TIMEOUT_SEC,
+        )
+        raw = ""
     except Exception as exc:
         # If the primary LLM call fails completely (e.g. server disconnect),
         # fall through to deterministic assignment instead of crashing the whole
         # pipeline.
         logger.warning("[planner] primary call_minimax failed: %s", exc, exc_info=True)
         raw = ""
+    primary_elapsed = time.monotonic() - primary_start
     result = extract_json(raw) or {}
     logger.info("[planner] primary extract_json type=%s keys=%s", type(result).__name__, list(result.keys()) if isinstance(result, dict) else "n/a")
 
@@ -497,8 +597,26 @@ async def planner_agent(
             logger.info("[planner] adapted legacy analysis into %d entries", len(adapted))
             photo_views = adapted
 
-    # Retry once with a stronger schema reminder if we still have no useful labels.
-    if not photo_views or all(e["view_id"] == "unknown" for e in photo_views):
+    # Decide whether retrying is worth the wall-time cost. The "stronger prompt"
+    # retry historically only helped when the model produced JSON with a wrong
+    # schema (e.g. ``analysis`` instead of ``photo_views``). Empty/garbled
+    # responses, or models that simply fail to label photos, won't get better
+    # with a second identical call. Skip the retry when:
+    #   - response was empty or too short (rate-limited / disconnected)
+    #   - the primary call already burned >45s of the per-batch budget
+    #   - the response parsed as JSON but had zero useful photo_views
+    # In all those cases, downstream filename hints + safety nets recover.
+    parsed_json = isinstance(result, dict) and bool(result)
+    has_alternative_schema = (
+        parsed_json
+        and "analysis" in result
+        and not result.get("photo_views")
+    )
+    should_retry = (
+        not photo_views or all(e["view_id"] == "unknown" for e in photo_views)
+    ) and has_alternative_schema and primary_elapsed < 45.0 and len(raw) >= 50
+
+    if should_retry:
         logger.warning("[planner] primary produced no usable photo_views; retrying with stronger prompt")
         retry_content = [
             {"type": "text", "text": system_prompt},
@@ -516,18 +634,40 @@ async def planner_agent(
             retry_content.append(_build_image_content(photo))
         retry_messages = [{"role": "user", "content": retry_content}]
         try:
-            raw = await call_minimax(retry_messages, temperature=0.0, max_tokens=4000)
+            raw = await asyncio.wait_for(
+                call_minimax(retry_messages, temperature=0.0, max_tokens=4000),
+                timeout=max(15.0, _PLANNER_BATCH_TIMEOUT_SEC - primary_elapsed),
+            )
             logger.info("[planner] retry call_minimax raw length=%d", len(raw))
+        except asyncio.TimeoutError:
+            logger.warning("[planner] retry call_minimax timed out")
+            raw = ""
         except Exception as exc:
             logger.warning("[planner] retry call_minimax failed: %s", exc, exc_info=True)
             raw = ""
         retry_result = extract_json(raw) or {}
-        logger.info("[planner] retry extract_json type=%s keys=%s", type(retry_result).__name__, list(retry_result.keys()) if isinstance(retry_result, dict) else "n/a")
+        logger.info(
+            "[planner] retry extract_json type=%s keys=%s",
+            type(retry_result).__name__,
+            list(retry_result.keys()) if isinstance(retry_result, dict) else "n/a",
+        )
         if isinstance(retry_result, dict):
             photo_views = _clean_view_entries(retry_result.get("photo_views", []))
             if not photo_views:
                 photo_views = _adapt_legacy_analysis(retry_result)
-            logger.info("[planner] retry photo_views count=%d known=%d", len(photo_views), sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")))
+            logger.info(
+                "[planner] retry photo_views count=%d known=%d",
+                len(photo_views),
+                sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")),
+            )
+    else:
+        logger.info(
+            "[planner] skipping retry (elapsed=%.1fs, raw_len=%d, parsed_json=%s, alt_schema=%s)",
+            primary_elapsed,
+            len(raw),
+            parsed_json,
+            has_alternative_schema,
+        )
 
     # Ensure every input photo has an entry; default to unknown if missing.
     seen_ids = {e["photo_id"] for e in photo_views}
@@ -638,6 +778,20 @@ async def planner_agent(
 
     logger.info("[planner] assembled photo_views count=%d exterior_views=%s", len(photo_views), sorted(current_exterior_views))
 
+    # DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 2: 把 filename 预解析的视图合并进
+    # LLM 结果。LLM 失败的 26% 情况下,filename hint 仍能给绝大多数照片正确视角。
+    if pre_resolved_views:
+        existing = {e["photo_id"] for e in photo_views}
+        merged = list(photo_views)
+        for entry in pre_resolved_views:
+            if entry["photo_id"] not in existing:
+                merged.append(entry)
+        photo_views = merged
+        logger.info(
+            "[planner] merged %d filename-resolved views with LLM output → total %d",
+            len(pre_resolved_views), len(photo_views),
+        )
+
     # Build a stable plan that excludes non-exterior photos. photo_types was
     # already computed at the top of the function.
     stable_plan = _stabilize_plan(photo_views, photos, photo_types)
@@ -647,11 +801,28 @@ async def planner_agent(
         stable_plan.get("workflow_plan", {}).get("missing_critical_views", []),
     )
 
-    # Fallback: if too few exterior views were identified, retry focusing only on
-    # ambiguous (unknown/exterior) photos to reduce catastrophic planner failures.
+    # Cross-batch coverage gap: when 4-batch topology leaves the merged
+    # plan with < 5 views, deterministically assign photos to fill the
+    # missing canonical views. No LLM call. The fallback_replan (LLM)
+    # is reserved for the case where augment can't recover anything.
     covered_views = stable_plan.get("workflow_plan", {}).get("priority_views", [])
-    if len(covered_views) < 3:
-        logger.warning("[planner] covered views < 3, running fallback_replan")
+    if len(covered_views) < 5:
+        logger.warning(
+            "[planner] covered views < 5 (%s), running deterministic augment",
+            covered_views,
+        )
+        stable_plan = _augment_exterior_coverage(stable_plan, photos, photo_types)
+        logger.info(
+            "[planner] after augment priority_views=%s",
+            stable_plan.get("workflow_plan", {}).get("priority_views", []),
+        )
+        covered_views = stable_plan.get("workflow_plan", {}).get("priority_views", [])
+
+    # Last resort: only if the plan still has zero views (every batch
+    # returned garbage), spend one LLM call to recover. The threshold
+    # is stricter so this fires only in truly broken runs.
+    if not covered_views:
+        logger.warning("[planner] covered views == 0, running fallback_replan")
         stable_plan = await _fallback_replan(
             stable_plan, photo_views, photos, vehicle_prior, photo_types
         )
@@ -673,6 +844,146 @@ async def planner_agent(
         [k for k, v in final_plan.get("view_groups", {}).items() if v],
     )
     return final_plan
+
+
+def _augment_exterior_coverage(
+    plan: Dict[str, Any],
+    photos: List[Dict[str, Any]],
+    photo_types: Dict[str, str],
+) -> Dict[str, Any]:
+    """Deterministically fill missing exterior views using filename rotation.
+
+    No LLM call. Runs after _stabilize_plan so the merged batches all
+    contribute to the rotation. Targets the canonical 6-view set:
+    front_left_45, front_right_45, rear_left_45, rear_right_45, left_90, right_90.
+
+    This replaces the old _fallback_replan LLM call when the merged plan
+    covers too few views (common with 4-batch topology since each batch
+    only sees ~8 photos).
+    """
+    view_groups = plan.get("view_groups", {})
+
+    target_views = [
+        "front_left_45", "front_right_45",
+        "rear_left_45", "rear_right_45",
+        "left_90", "right_90",
+    ]
+    covered = {v for v, g in view_groups.items() if g and is_exterior_view(v)}
+    missing = [v for v in target_views if v not in covered]
+
+    if not missing:
+        return plan
+
+    # Pool: exterior/unknown photos that aren't already in any of the
+    # target views. We rotate from the broadest pool first so we don't
+    # steal photos from views the LLM confidently labelled.
+    rotation_pool: List[Dict[str, Any]] = []
+    in_target_ids: set = set()
+    for view_id in target_views:
+        for p in view_groups.get(view_id, []):
+            pid = p.get("id", "")
+            if pid:
+                in_target_ids.add(pid)
+    for photo in photos:
+        pid = photo.get("id", "")
+        if not pid:
+            continue
+        # Skip non-exterior photos (interior / auxiliary / scene_intake)
+        photo_type = photo_types.get(pid, "")
+        if photo_type and photo_type not in ("exterior", "unknown"):
+            continue
+        if pid not in in_target_ids:
+            rotation_pool.append(photo)
+
+    if not rotation_pool:
+        return plan
+
+    # Sort by filename index for stable rotation
+    def _idx(p: Dict[str, Any]) -> int:
+        stem = (p.get("id", "") or "").split(".")[0]
+        match = re.search(r"(\d+)(?=\D*$)", stem)
+        return int(match.group(1)) if match else 9999
+
+    rotation_pool.sort(key=_idx)
+
+    enriched_groups = {k: list(v) for k, v in view_groups.items()}
+
+    for view_id in missing:
+        placed = False
+        for candidate in rotation_pool:
+            cid = candidate.get("id", "")
+            if not cid:
+                continue
+            already_in = {p.get("id", "") for p in enriched_groups.get(view_id, [])}
+            if cid in already_in:
+                continue
+            enriched = dict(candidate)
+            enriched["_planner_view"] = view_id
+            enriched["_planner_confidence"] = "low"
+            enriched["_planner_reason"] = "deterministic augment to fill missing view"
+            enriched_groups.setdefault(view_id, []).append(enriched)
+            placed = True
+            break
+        if not placed:
+            # Fall back: take the first rotation_pool entry
+            candidate = rotation_pool[0]
+            cid = candidate.get("id", "")
+            if cid:
+                enriched = dict(candidate)
+                enriched["_planner_view"] = view_id
+                enriched["_planner_confidence"] = "low"
+                enriched["_planner_reason"] = "deterministic augment to fill missing view (no free photo)"
+                enriched_groups.setdefault(view_id, []).append(enriched)
+
+    # Recompute coverage gaps
+    coverage_gaps: List[Dict[str, Any]] = []
+    for view_id in get_all_exterior_views():
+        if view_id == "top":
+            continue
+        if not enriched_groups.get(view_id):
+            regions = get_regions_for_view(view_id)
+            coverage_gaps.append({
+                "missing_view": view_id,
+                "display_name": get_display_name(view_id),
+                "impacted_regions": regions,
+                "impacted_parts": _impacted_parts_for_missing_view(view_id),
+                "suggested_action": f"补拍{get_display_name(view_id)}照片",
+            })
+
+    priority_views = [v for v, g in enriched_groups.items() if g and is_exterior_view(v)]
+    missing_critical_views = [g["missing_view"] for g in coverage_gaps]
+
+    # Update photo_views: keep originals, add new augmented entries
+    existing_ids = {e["photo_id"] for e in plan.get("photo_views", [])}
+    new_photo_views = list(plan.get("photo_views", []))
+    for view_id, plist in enriched_groups.items():
+        for p in plist:
+            pid = p.get("id", "")
+            if pid and pid not in existing_ids:
+                new_photo_views.append({
+                    "photo_id": pid,
+                    "view_id": view_id,
+                    "confidence": p.get("_planner_confidence", "low"),
+                    "reason": p.get("_planner_reason", ""),
+                })
+                existing_ids.add(pid)
+
+    logger.info(
+        "[planner] augment_coverage: filled missing views %s; priority_views=%d",
+        missing,
+        len(priority_views),
+    )
+
+    return {
+        "photo_views": new_photo_views,
+        "view_groups": enriched_groups,
+        "coverage_gaps": coverage_gaps,
+        "workflow_plan": {
+            "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
+            "priority_views": priority_views,
+            "missing_critical_views": missing_critical_views,
+        },
+    }
 
 
 def _ensure_exterior_coverage(

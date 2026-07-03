@@ -7,7 +7,7 @@ import asyncio
 import aiohttp
 import logging
 import time
-from typing import List, Dict, Any
+from typing import List, Tuple, Dict, Any
 from config import MINIMAX_API_KEY, MINIMAX_BASE_URL, MINIMAX_MODEL, REQUEST_TIMEOUT
 from agents.image_utils import compress_image_to_base64
 
@@ -104,24 +104,38 @@ async def call_minimax(
 
 
 def clean_minimax_output(text: str) -> str:
-    """清洗 MiniMax 模型输出：去掉 thinking 标签和 markdown code block，保留有效 JSON。
+    """清洗 MiniMax 模型输出,提取 JSON。
 
-    MiniMax-M3 有时会把完整思考过程包裹在 <think>...</think> 标签里，而真正的
-    JSON 答案可能放在 think 标签**之外**；但也可能出现 think 标签里就包含 JSON
-    的情况。本函数会：
-    1. 先提取 think 标签外的文本；
-    2. 如果外部文本为空，再尝试从 think 标签内部提取 JSON；
-    3. 去掉 markdown code block 标记。
+    优先级:
+    1. 尝试整段作为 JSON(无 think 标签时)
+    2. think 标签外的 JSON
+    3. think 标签内嵌的 JSON
+    4. narrative 中嵌入的 JSON(栈匹配找所有 { } 块)
+    5. 全部失败,返回 cleaned narrative(走 fallback)
     """
     if not text:
         return ""
 
-    original = text
+    text = _strip_code_fences(text)
 
-    # 1. Strip markdown code fences first so they don't hide JSON inside think tags.
-    text = _strip_code_fences(original)
+    outside_parts, inside_parts = _split_think_tags(text)
+    outside = "".join(outside_parts).strip()
+    if outside:
+        json_snip = _find_first_valid_json(outside)
+        if json_snip:
+            return json_snip
 
-    # 2. Split content inside and outside <think> tags.
+    inside = "".join(inside_parts).strip()
+    if inside:
+        json_snip = _find_first_valid_json(inside)
+        if json_snip:
+            return json_snip
+
+    return text  # 全部失败,返回原 cleaned 文本
+
+
+def _split_think_tags(text: str) -> Tuple[List[str], List[str]]:
+    """Split text by <think>...</think> tags. Returns (outside_parts, inside_parts)."""
     outside_parts: List[str] = []
     inside_parts: List[str] = []
     idx = 0
@@ -137,26 +151,11 @@ def clean_minimax_output(text: str) -> str:
             break
         inside_parts.append(text[start + len("<think>"):end])
         idx = end + len("</think>")
-
-    # 3. Prefer content outside think tags; that's where the answer usually lives.
-    outside = "".join(outside_parts).strip()
-    if outside:
-        return _strip_code_fences(outside)
-
-    # 4. If everything was inside think tags, try to find JSON in there.
-    inside = "".join(inside_parts).strip()
-    if inside:
-        # Try to return just the JSON-looking part if one exists.
-        json_candidate = _extract_json_like_snippet(inside)
-        if json_candidate:
-            return json_candidate
-        return _strip_code_fences(inside)
-
-    return ""
+    return outside_parts, inside_parts
 
 
 def _strip_code_fences(text: str) -> str:
-    """Remove markdown ```json ... ``` fences."""
+    """Remove markdown \`\`\`json ... \`\`\` fences."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -168,25 +167,106 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
-def _extract_json_like_snippet(text: str) -> str:
-    """If the text contains a JSON object/array, return the outermost one."""
-    start_obj = text.find("{")
-    end_obj = text.rfind("}")
-    start_arr = text.find("[")
-    end_arr = text.rfind("]")
+def _find_first_valid_json(text: str) -> str:
+    """扫描文本,找所有 { } 平衡块,返回第一个能 json.loads 成功的。
 
+    必须解析为 dict 或 list(不是单个 int/string/None)。
+    """
+    if not text:
+        return ""
+    text = text.strip()
+
+    # 快速通道:整段以 { 开头以 } 结尾,直接试
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, (dict, list)):
+                return text
+        except json.JSONDecodeError:
+            pass
+
+    # 快速通道:整段以 [ 开头以 ] 结尾,直接试
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            obj = json.loads(text)
+            if isinstance(obj, (dict, list)):
+                return text
+        except json.JSONDecodeError:
+            pass
+
+    # 栈匹配:按出现顺序找 { } 平衡块
     candidates = []
-    if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
-        candidates.append((start_obj, end_obj + 1))
-    if start_arr != -1 and end_arr != -1 and end_arr > start_arr:
-        candidates.append((start_arr, end_arr + 1))
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "{":
+            # 从 i 开始向右找匹配的 }
+            depth = 0
+            in_string = False
+            escape = False
+            for j in range(i, n):
+                ch = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append((i, j + 1))
+                        break
+            i += 1
+        else:
+            i += 1
 
-    candidates.sort()
+    # 同样找 [ ] 平衡块
+    i = 0
+    while i < n:
+        if text[i] == "[":
+            depth = 0
+            in_string = False
+            escape = False
+            for j in range(i, n):
+                ch = text[j]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"' and not escape:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append((i, j + 1))
+                        break
+            i += 1
+        else:
+            i += 1
+
+    # 按出现顺序排序,返回第一个可解析的
+    candidates.sort(key=lambda x: x[0])
     for start, end in candidates:
         snippet = text[start:end]
         try:
-            json.loads(snippet)
-            return snippet
+            obj = json.loads(snippet)
+            if isinstance(obj, (dict, list)):
+                return snippet
         except json.JSONDecodeError:
             continue
     return ""

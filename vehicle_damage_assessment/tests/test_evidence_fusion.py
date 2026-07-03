@@ -116,22 +116,27 @@ class TestFuseEvidence:
         assert fused["status"] == "damaged"
 
     def test_non_critical_part_not_fused(self):
-        """Only safety/structural-critical parts are fused."""
+        """Only safety/structural-critical parts are fused.
+
+        DAMAGE_RECOGNITION_POLICY: hood 与 trunk_lid 现已被加入 _CRITICAL_FUSION_PARTS
+        (它们是 high-sensitivity 部件,severe 损伤必须穿透 primary-intact)。
+        本测试用 bumper_front 作为 non-critical part 的代表。
+        """
         candidates = [
             _fake_candidate(
-                "hood",
+                "bumper_front",
                 "front",
                 status="damaged",
                 damage_level="moderate",
             ),
             _fake_candidate(
-                "hood",
+                "bumper_front",
                 "front_left_45",
                 status="damaged",
                 damage_level="light",
             ),
         ]
-        assert fuse_evidence("hood", candidates) is None
+        assert fuse_evidence("bumper_front", candidates) is None
 
 
 class TestCollectEvidence:
@@ -187,10 +192,13 @@ class TestApplyFusionEndToEnd:
         assert overrides["windshield_front"]["_fused"] is True
 
     def test_no_overrides_when_no_critical_parts(self):
+        """DAMAGE_RECOGNITION_POLICY: hood 与 trunk_lid 现已被加入 critical 集合。
+        本测试用 bumper_front 作为 non-critical part 的代表。
+        """
         results = [
             {"view_id": "front", "parts": [
                 _fake_candidate(
-                    "hood",
+                    "bumper_front",
                     "front",
                     status="damaged",
                     damage_level="moderate",

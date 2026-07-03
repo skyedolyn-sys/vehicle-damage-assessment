@@ -203,9 +203,31 @@ class TestSynthesizerRearSideInference:
         assert part["status"] == "intact"
 
     def test_intact_status_clears_damage_type(self):
-        """When final status is intact, damage_type should be empty."""
+        """When final status is intact, damage_type should be empty.
+
+        DAMAGE_RECOGNITION_POLICY §3.3: 车顶不再默认 intact。
+        只有当 primary(top 视角) 给出 high-confidence intact 时,才允许 intact。
+        """
         topology = _build_right_rear_topology()
         region_results = [
+            {
+                "region": "top",
+                "parts": [
+                    {
+                        "part_id": "roof_rear",
+                        "part_name": "车顶后部",
+                        "part_category": "roof",
+                        "side": "center",
+                        "status": "intact",
+                        "damage_level": "none",
+                        "damage_type": [],
+                        "confidence": "high",
+                        "evidence_photo": ["photo_top"],
+                        "notes": "车顶俯视钣金平整",
+                    },
+                ],
+                "uncertain_items": [],
+            },
             {
                 "region": "rear_left",
                 "parts": [

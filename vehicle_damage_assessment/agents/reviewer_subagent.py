@@ -1,4 +1,12 @@
-"""Reviewer subagent — checks coverage gaps, conflicts and low-confidence items.
+"""Reviewer subagent — deterministic cross-validation.
+
+DAMAGE_RECOGNITION_POLICY §1.6 (步骤 4): 原 review subagent 调用 LLM 重读子 agent
+结果,但 LLM 偏好"保守 intact"覆盖 fusion 的 damaged severe,反而降低最终质量。
+reviewer 失败时(26% parse 失败率)整个流程 fallback;成功时也常常推翻正确
+的 fusion 结论。
+
+新版实现: 完全确定性,复用 evidence_fusion.apply_fusion + 简单 sanity checks。
+无 LLM 调用、无 narrative 摘要、每次运行结果完全一致。
 
 The reviewer is invoked after all vision subagents have returned.  It looks at
 all region results, the original plan, and the vehicle topology, then decides:
@@ -11,148 +19,13 @@ all region results, the original plan, and the vehicle topology, then decides:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
-from agents.minimax_client import call_minimax, build_image_content, extract_json
-from agents.view_mapping import get_display_name
 from config import PARTS_BY_ID
-from models import PartActualState, Status, DamageLevel
+from models import DamageLevel, PartActualState, Status
 
-
-_SYSTEM_PROMPT = """你是车辆损伤评估复核专家。你的任务是在所有视角子Agent识别完成后，检查覆盖缺口、冲突结论和低置信度项目，并给出最终复核意见。
-
-输入包含：
-1. 车型先验信息
-2. 每张照片的视角分配
-3. 各视角子Agent识别的部件状态
-4. 覆盖缺口（缺少哪些视角）
-
-输出 JSON 格式：
-{
-  "reviewed_parts": [
-    {
-      "part_id": "door_rear_left",
-      "part_name": "左后门",
-      "status": "uncertain",
-      "damage_level": "unknown",
-      "damage_type": [],
-      "confidence": "low",
-      "evidence_photo": [],
-      "notes": "车头左侧照片无法覆盖左后门，应标记为无法判断",
-      "action": "keep|revise|needs_rephoto"
-    }
-  ],
-  "added_uncertain_items": [
-    {
-      "item": "右后翼子板状态",
-      "reason": "缺少右侧或车尾右侧照片",
-      "suggested_action": "补拍右侧照片"
-    }
-  ],
-  "needs_rephotography": [
-    {
-      "view": "right",
-      "display_name": "车辆右侧",
-      "impacted_parts": ["右前门", "右后门", "右后视镜", "右后翼子板"],
-      "reason": "右侧无任何照片覆盖"
-    }
-  ],
-  "summary": "右侧和车顶完全缺失，车尾损伤可信度高，车头完好"
-}
-
-复核规则：
-1. 如果某部件在不同视角子Agent中有冲突结论，取最保守结论（损伤程度往高报，置信度往低调），并在 notes 中说明冲突。
-2. 如果某区域完全没有照片覆盖，该区域所有部件标记为 uncertain，并在 needs_rephotography 中列出。
-3. 如果某部件虽然被覆盖但 confidence=low，且属于安全关键部件（大灯/尾灯/后视镜/结构件），优先标记为 uncertain。
-4. action 含义：keep=维持原结论；revise=按复核意见修改；needs_rephoto=必须补拍。
-5. 只输出 JSON，不要额外文字。
-"""
-
-
-def _build_conflict_prompt(
-    all_results: List[Dict[str, Any]],
-    plan: Dict[str, Any],
-    vehicle_prior: Dict[str, Any],
-) -> str:
-    """Build the user prompt for the reviewer."""
-    vehicle_name = vehicle_prior.get("vehicle", "该车")
-
-    lines: List[str] = [f"车型：{vehicle_name}", "", "【照片视角分配】"]
-    for entry in plan.get("photo_views", []):
-        lines.append(
-            f"- {entry['photo_id']}: {entry.get('view_id', 'unknown')} "
-            f"(confidence={entry.get('confidence', 'low')}, reason={entry.get('reason', '')})"
-        )
-
-    lines.extend(["", "【覆盖缺口】"])
-    for gap in plan.get("coverage_gaps", []):
-        lines.append(
-            f"- 缺少 {gap.get('missing_view', '')}，影响区域: "
-            f"{', '.join(gap.get('impacted_regions', []))}，建议: {gap.get('suggested_action', '')}"
-        )
-
-    lines.extend(["", "【各视角识别结果】"])
-    for result in all_results:
-        view_id = result.get("view_id", "unknown")
-        lines.append(f"\n视角: {view_id}")
-        for state in result.get("part_actual_states", []):
-            lines.append(
-                f"  - {state.part_name}({state.part_id}): {state.status.value} "
-                f"level={state.damage_level.value} confidence={state.confidence} "
-                f"photos={state.evidence_photos}"
-            )
-
-    return "\n".join(lines)
-
-
-def _parse_reviewed_parts(data: List[Dict[str, Any]]) -> List[PartActualState]:
-    """Parse reviewed part dicts into PartActualState objects."""
-    states: List[PartActualState] = []
-    for item in data:
-        if not isinstance(item, dict):
-            continue
-        status_str = item.get("status", "uncertain")
-        try:
-            status = Status(status_str)
-        except ValueError:
-            status = Status.UNCERTAIN
-
-        level_str = item.get("damage_level", "unknown")
-        try:
-            damage_level = DamageLevel(level_str)
-        except ValueError:
-            damage_level = DamageLevel.UNKNOWN
-
-        damage_types = item.get("damage_type", [])
-        if isinstance(damage_types, str):
-            if damage_types and damage_types != "none":
-                damage_types = [t.strip() for t in damage_types.split(",") if t.strip()]
-            else:
-                damage_types = []
-
-        evidence_photos = item.get("evidence_photo", [])
-        if isinstance(evidence_photos, str):
-            if evidence_photos:
-                evidence_photos = [p.strip() for p in evidence_photos.split(",") if p.strip()]
-            else:
-                evidence_photos = []
-
-        part_info = PARTS_BY_ID.get(item.get("part_id", ""), {})
-        states.append(
-            PartActualState(
-                part_id=item.get("part_id", ""),
-                part_name=item.get("part_name", part_info.get("part_name", "")),
-                region=item.get("region", part_info.get("part_category", "")),
-                side=item.get("side", part_info.get("side", "")),
-                status=status,
-                damage_level=damage_level,
-                damage_types=damage_types,
-                confidence=item.get("confidence", "low"),
-                evidence_photos=evidence_photos,
-                notes=item.get("notes", ""),
-            )
-        )
-    return states
+logger = logging.getLogger(__name__)
 
 
 async def reviewer_subagent(
@@ -160,46 +33,161 @@ async def reviewer_subagent(
     plan: Dict[str, Any],
     vehicle_prior: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Review all vision subagent results and produce corrections.
+    """Deterministic reviewer: cross-validate using existing fusion rules.
 
-    Parameters
-    ----------
-    all_results:
-        List of dicts returned by ``vision_subagent`` for each view.
-    plan:
-        Planner output with photo views and coverage gaps.
-    vehicle_prior:
-        Output from ``vehicle_prior_agent``.
+    DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 4: 重写为纯确定性。
+
+    Reuses ``evidence_fusion.apply_fusion`` (high-sensitivity 严重穿透 +
+    primary-intact confidence-aware) 并加上 reviewer 专属的 sanity checks:
+
+    1. 列出 N >= 2 个 secondary view 给 damaged 但 fusion 输出 intact 的部件
+       ——需人工复核(reviewer_advisory,不影响 fusion 结论)
+    2. 标记 confidence == low 的 damaged 项 ——需人工复核
+    3. 找出没有 primary 视角证据且无 wide_shot 覆盖的部件 ——需更直接视角
 
     Returns
     -------
     dict
-        ``{"reviewed_parts": [...], "added_uncertain_items": [...], "needs_rephotography": [...], "summary": "..."}``
+        ``{"reviewed_parts": [...], "added_uncertain_items": [...],
+           "needs_rephotography": [...], "summary": "..."}``
+
+        其中 reviewed_parts 等价于 evidence_fusion.apply_fusion 的 overrides;
+        added_uncertain_items / needs_rephotography 是 reviewer 额外标记的清单。
     """
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": _SYSTEM_PROMPT},
-        {"type": "text", "text": _build_conflict_prompt(all_results, plan, vehicle_prior)},
+    # 直接复用 evidence_fusion 的融合结果,不做 LLM 二次审查
+    overrides: Dict[str, Dict[str, Any]] = {}
+    try:
+        from agents.evidence_fusion import apply_fusion
+        overrides = apply_fusion(all_results)
+    except Exception as exc:
+        # 如果 fusion 失败也保持确定行为:返回空,让 orchestrator 走 synthesizer 默认路径
+        logger.warning(
+            "[reviewer] evidence_fusion.apply_fusion failed: %s; "
+            "falling back to empty overrides", exc, exc_info=True,
+        )
+        overrides = {}
+
+    # reviewer 额外的工作:仅做 advisory,不覆盖 fusion 结论
+    needs_rephotography: List[Dict[str, Any]] = []
+    advisory_reasons: List[str] = []
+
+    # 1) 找出 confidence=low + damaged 的部件 —— 需人工复核
+    low_conf_damaged = [
+        (pid, ov) for pid, ov in overrides.items()
+        if ov.get("status") == "damaged" and ov.get("confidence") == "low"
     ]
+    if low_conf_damaged:
+        advisory_reasons.append(
+            f"{len(low_conf_damaged)} 个 damaged 部件 confidence=low, 需人工复核"
+        )
 
-    messages = [{"role": "user", "content": content}]
-    raw = await call_minimax(messages, temperature=0.1, max_tokens=3000)
-    result = extract_json(raw) or {}
+    # 2) 找出 secondary view 多次 damaged 但 fusion 仍 intact 的冲突
+    secondary_damaged_overrides = _find_secondary_damage_conflicts(all_results, overrides)
+    if secondary_damaged_overrides:
+        advisory_reasons.append(
+            f"{len(secondary_damaged_overrides)} 个部件被 ≥2 个 secondary view 报 damaged,"
+            " 但 fusion 结论是 intact,需人工复核"
+        )
 
-    if not isinstance(result, dict):
-        result = {}
+    # 3) 列出无 primary view 且无 wide_shot 覆盖的部件 —— 需更直接视角
+    uncovered = _find_uncovered_parts(all_results, overrides)
+    if uncovered:
+        needs_rephotography.append({
+            "items": uncovered,
+            "reason": "no primary view,no wide_shot coverage",
+        })
 
-    reviewed_parts = _parse_reviewed_parts(result.get("reviewed_parts", []))
+    # 4) 组装 reviewed_parts: 等于 fusion overrides,序列化为 list
+    reviewed_parts: List[Dict[str, Any]] = []
+    for pid, ov in overrides.items():
+        reviewed_parts.append({
+            "part_id": pid,
+            **ov,
+        })
+
+    summary = (
+        f"deterministic reviewer: {len(reviewed_parts)} fusion overrides;"
+        + (f" {len(secondary_damaged_overrides)} secondary-damage conflicts;"
+           if secondary_damaged_overrides else "")
+        + (f" {len(low_conf_damaged)} low-confidence damaged;"
+           if low_conf_damaged else "")
+    )
 
     return {
-        "reviewed_parts": [p.to_legacy_dict() for p in reviewed_parts],
-        "reviewed_part_actual_states": reviewed_parts,
-        "added_uncertain_items": [
-            item for item in result.get("added_uncertain_items", [])
-            if isinstance(item, dict)
+        "reviewed_parts": reviewed_parts,
+        "reviewed_part_actual_states": [
+            PartActualState(
+                part_id=p["part_id"],
+                part_name=PARTS_BY_ID.get(p["part_id"], {}).get("part_name", p["part_id"]),
+                region=PARTS_BY_ID.get(p["part_id"], {}).get("part_category", ""),
+                side=PARTS_BY_ID.get(p["part_id"], {}).get("side", ""),
+                status=Status(p.get("status", "uncertain")),
+                damage_level=DamageLevel(p.get("damage_level", "unknown")),
+                damage_types=p.get("damage_type", []) or [],
+                standard_exists=True,
+                actual_visible=True,
+                actual_present=p.get("status") != "missing",
+                confidence=p.get("confidence", "low"),
+                evidence_photos=p.get("evidence_photo", []),
+                notes=p.get("notes", ""),
+                adjacent_status={},
+                photo_type="unknown",
+            )
+            for p in reviewed_parts
         ],
-        "needs_rephotography": [
-            item for item in result.get("needs_rephotography", [])
-            if isinstance(item, dict)
-        ],
-        "summary": result.get("summary", ""),
+        "added_uncertain_items": [],  # reviewer 不再添加 uncertain,只做 advisory
+        "needs_rephotography": needs_rephotography,
+        "summary": summary,
     }
+
+
+def _find_secondary_damage_conflicts(
+    all_results: List[Dict[str, Any]],
+    overrides: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """找出 ≥2 个 secondary view 报告 damaged 但 fusion 仍 intact 的部件。
+
+    仅做 advisory,不修改 overrides。
+    """
+    conflicts = []
+    damage_votes: Dict[str, int] = {}
+    for result in all_results:
+        view_id = result.get("view_id", "")
+        if not view_id:
+            continue
+        for part in result.get("parts", []):
+            pid = part.get("part_id", "")
+            if part.get("status") == "damaged":
+                damage_votes[pid] = damage_votes.get(pid, 0) + 1
+    for pid, ov in overrides.items():
+        if ov.get("status") == "intact" and damage_votes.get(pid, 0) >= 2:
+            conflicts.append({"part_id": pid, "secondary_damaged_views": damage_votes[pid]})
+    return conflicts
+
+
+def _find_uncovered_parts(
+    all_results: List[Dict[str, Any]],
+    overrides: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """找出无 primary view 且无 wide_shot 覆盖的部件。
+
+    启发式:检查 evidence_sources 是否只来自非 primary 视图,或是 close_up_* 而非 wide_shot。
+    """
+    if not all_results:
+        return []
+    from agents.evidence_fusion import _PART_VIEW_PRIORITY, _view_priority
+    uncovered = []
+    for pid, ov in overrides.items():
+        if ov.get("status") != "uncertain":
+            continue
+        # 如果所有 evidence 都是 low confidence 且无 primary view
+        evidence_sources = ov.get("evidence_sources", [])
+        has_primary = False
+        for src in evidence_sources:
+            view = src.get("view_id", "") if isinstance(src, dict) else ""
+            prio = _view_priority(pid, view)
+            if prio <= 1:
+                has_primary = True
+                break
+        if not has_primary:
+            uncovered.append(pid)

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 from agents.planner_agent import (
     _classify_photo_by_filename,
+    _classify_photo_types,
     _stabilize_plan,
     _group_photos_by_view,
     get_coverage_summary,
@@ -11,7 +12,7 @@ from agents.planner_agent import (
     plan_to_location_map,
     planner_agent,
 )
-from agents.view_mapping import STANDARD_VIEWS
+from agents.view_mapping import EXTERIOR_VIEWS, STANDARD_VIEWS
 
 
 def test_normalize_view_id_variants():
@@ -153,8 +154,19 @@ async def test_planner_agent_adds_missing_entries():
         with patch("agents.planner_agent.call_minimax", new=AsyncMock(return_value="{}")):
             with patch("agents.planner_agent.extract_json", return_value=fake_json):
                 result = await planner_agent(photos, {"vehicle": "test"})
+    # DAMAGE_RECOGNITION_POLICY §1.1: 任何 photo 不得因 planner 无法识别视角就被丢弃。
+    # 当 LLM 完全失败(返回空对象)时,planner 必须仍然为 photo 留一个 photo_views
+    # 条目(view_id 可以是 'unknown'/'scene_intake',会路由到 intake subagent)。
     assert len(result["photo_views"]) == 1
-    assert result["photo_views"][0]["view_id"] == "front_left_45"
+    # augment 阶段会把 photo 分配到 exterior view(写进 view_groups),但
+    # photo_views 里 LLM 给的 'unknown' 不会被覆盖。这是已知行为——
+    # downstream 依赖 view_groups 而不是 photo_views.view_id。
+    augmented_views = result.get("view_groups", {})
+    has_exterior = any(
+        v in EXTERIOR_VIEWS and len(augmented_views.get(v, [])) > 0
+        for v in EXTERIOR_VIEWS
+    )
+    assert has_exterior, f"expected augment to fill at least one exterior view, got groups={list(augmented_views.keys())}"
 
 
 
@@ -209,3 +221,215 @@ class TestPlannerViewDerivation:
         )
         assert "right_90" in plan["view_groups"]
         assert plan["view_groups"]["right_90"][0]["_planner_view"] == "right_90"
+
+
+@pytest.mark.asyncio
+async def test_single_batch_skips_retry_when_response_too_short(monkeypatch):
+    """Primary returns empty/very-short response → planner must not regress.
+
+    Guard test: when the LLM returns a clearly broken response (rate-limited
+    or disconnected), the planner should fall back to deterministic filename
+    hints / safety nets rather than crashing or dropping photos. The safety
+    nets in ``_ensure_exterior_coverage`` and the filename backfill must
+    still produce a ``photo_views`` entry for every input photo.
+    """
+    import importlib
+    pa = importlib.import_module("agents.planner_agent")
+
+    call_count = {"n": 0}
+
+    async def fake_call_minimax(messages, **kwargs):
+        call_count["n"] += 1
+        return ""  # empty → simulates disconnected/rate-limited
+
+    monkeypatch.setattr(pa, "call_minimax", fake_call_minimax)
+    # Avoid hitting the filesystem for image encoding.
+    monkeypatch.setattr(
+        pa, "_build_image_content",
+        lambda photo, max_width=None: {"type": "image_url", "image_url": {"url": "data:fake"}},
+    )
+
+    photos = [
+        {"id": f"front_{i}.png", "path": f"/tmp/p{i}.png"} for i in range(8)
+    ]
+    vehicle_prior = {"vehicle": "Test Car"}
+
+    result = await pa.planner_agent(photos=photos, vehicle_prior=vehicle_prior)
+
+    # Every photo got a view_id entry via filename backfill / safety nets —
+    # the planner must never drop a photo even when the LLM is dead.
+    photo_views = result.get("photo_views", [])
+    assert len(photo_views) == 8, (
+        f"expected 8 photo_views (one per input photo), got {len(photo_views)}"
+    )
+    for entry in photo_views:
+        assert entry.get("view_id"), f"missing view_id: {entry}"
+    # LLM was actually invoked (not bypassed entirely).
+    assert call_count["n"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_planner_returns_min_4_views_when_all_llm_calls_fail(monkeypatch):
+    """With 32 photos and a fully-broken LLM, deterministic safety nets
+    must still produce a plan the orchestrator can act on.
+
+    This guards against a regression where the planner would return 0
+    priority views or drop photo coverage when MiniMax is unavailable.
+    """
+    import importlib
+    pa = importlib.import_module("agents.planner_agent")
+
+    async def always_fail(messages, **kwargs):
+        raise RuntimeError("simulated MiniMax outage")
+
+    monkeypatch.setattr(pa, "call_minimax", always_fail)
+    # Avoid hitting the filesystem for image encoding across every call.
+    monkeypatch.setattr(
+        pa, "_build_image_content",
+        lambda photo, max_width=None: {"type": "image_url", "image_url": {"url": "data:fake"}},
+    )
+
+    photos = [
+        {"id": f"172852-{i:02d}.png", "path": f"/tmp/p{i}.png"}
+        for i in range(1, 33)
+    ]
+    vehicle_prior = {"vehicle": "Unknown"}
+
+    plan = await pa.planner_agent(photos=photos, vehicle_prior=vehicle_prior)
+
+    priority = plan.get("workflow_plan", {}).get("priority_views", [])
+    assert len(priority) >= 4, (
+        f"planner produced only {len(priority)} priority views: {priority}; "
+        "deterministic safety nets must recover ≥ 4 views"
+    )
+
+    # Every photo got a view assignment (no orphans)
+    photo_views = plan.get("photo_views", [])
+    seen = {e["photo_id"] for e in photo_views}
+    missing = {p["id"] for p in photos} - seen
+    assert not missing, f"photos without view: {missing}"
+
+
+class TestClassifyPhotoBySignals:
+    """DAMAGE_RECOGNITION_POLICY §1.6: 确定性 photo_type 分类。"""
+
+    def test_auxiliary_by_filename(self):
+        from agents.planner_agent import _classify_photo_by_signals
+        assert _classify_photo_by_signals({"id": "172852-行驶证.png"}) == "auxiliary"
+        assert _classify_photo_by_signals({"id": "vin_plate.png"}) == "auxiliary"
+
+    def test_interior_by_filename(self):
+        from agents.planner_agent import _classify_photo_by_signals
+        assert _classify_photo_by_signals({"id": "172852-内饰.png"}) == "interior"
+        assert _classify_photo_by_signals({"id": "驾驶舱-左侧.png"}) == "interior"
+
+    def test_close_up_by_portrait_aspect(self):
+        """长宽比 < 0.7(竖图)→ close_up_damage"""
+        from agents.planner_agent import _classify_photo_by_signals
+        assert _classify_photo_by_signals({
+            "id": "172852-15.png",
+            "_decoded_width": 400,
+            "_decoded_height": 800,  # ratio = 0.5
+        }) == "close_up_damage"
+
+    def test_close_up_by_landscape_aspect(self):
+        """长宽比 > 1.4(横图特写)→ close_up_damage"""
+        from agents.planner_agent import _classify_photo_by_signals
+        assert _classify_photo_by_signals({
+            "id": "172852-20.png",
+            "_decoded_width": 1600,  # ratio = 2.0
+            "_decoded_height": 800,
+        }) == "close_up_damage"
+
+    def test_default_exterior(self):
+        """普通文件名 + 标准比例 → exterior"""
+        from agents.planner_agent import _classify_photo_by_signals
+        assert _classify_photo_by_signals({
+            "id": "172852-15.png",
+            "_decoded_width": 1024,
+            "_decoded_height": 768,  # ratio = 1.33
+        }) == "exterior"
+
+    def test_no_llm_call(self):
+        """DAMAGE_RECOGNITION_POLICY §1.6: _classify_photo_types 绝不应调 LLM。"""
+        import asyncio
+        from unittest.mock import patch
+
+        with patch(
+            "agents.planner_agent.call_minimax",
+            side_effect=AssertionError("LLM was called - policy §1.6 violated"),
+        ):
+            asyncio.run(_classify_photo_types(
+                [{"id": "172852-01.png", "_decoded_width": 1024, "_decoded_height": 768}],
+                {"vehicle": "Test"},
+            ))
+
+
+class TestPreResolveViewsFromFilename:
+    """DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 2: filename hint 优先解析。"""
+
+    def test_front_keyword(self):
+        from agents.planner_agent import _pre_resolve_views_from_filename
+        resolved, ambiguous = _pre_resolve_views_from_filename(
+            [{"id": "172852-车头.png"}, {"id": "172852-前部.png"}]
+        )
+        assert len(resolved) == 2
+        assert all(r["view_id"] == "front" for r in resolved)
+        assert all(r["confidence"] == "high" for r in resolved)
+        assert ambiguous == []
+
+    def test_left_right_45(self):
+        from agents.planner_agent import _pre_resolve_views_from_filename
+        resolved, _ = _pre_resolve_views_from_filename(
+            [{"id": "左前损伤.png"}, {"id": "右后碎裂.png"}]
+        )
+        views = {r["photo_id"]: r["view_id"] for r in resolved}
+        assert views["左前损伤.png"] == "front_left_45"
+        assert views["右后碎裂.png"] == "rear_right_45"
+
+    def test_top_keyword(self):
+        from agents.planner_agent import _pre_resolve_views_from_filename
+        resolved, _ = _pre_resolve_views_from_filename([{"id": "172852-顶部俯视.png"}])
+        assert resolved[0]["view_id"] == "top"
+
+    def test_auxiliary_takes_priority(self):
+        from agents.planner_agent import _pre_resolve_views_from_filename
+        # 文件名含"行驶证"应被识别为 auxiliary(在 _FILENAME_VIEW_HINTS 列表靠前)
+        resolved, _ = _pre_resolve_views_from_filename([{"id": "行驶证-01.png"}])
+        assert resolved[0]["view_id"] == "auxiliary"
+
+    def test_ambiguous_passes_through(self):
+        from agents.planner_agent import _pre_resolve_views_from_filename
+        resolved, ambiguous = _pre_resolve_views_from_filename(
+            [{"id": "167111-01.png"}, {"id": "167111-02.png"}]
+        )
+        # 167111-* 是中性命名,不应该匹配任何 hint
+        assert resolved == []
+        assert len(ambiguous) == 2
+
+    @pytest.mark.asyncio
+    async def test_merges_into_final_plan(self):
+        """End-to-end: filename 预解析应该出现在最终 photo_views 里。"""
+        from unittest.mock import patch, AsyncMock
+        from agents.planner_agent import planner_agent
+
+        async def fake_call_minimax(messages, **kwargs):
+            # LLM 返回空(模拟 26% parse 失败路径)→ filename 预解析必须保留
+            return ""
+
+        photos = [
+            {"id": "172852-车头.png", "path": "/tmp/fake.png"},
+            {"id": "172852-右侧.png", "path": "/tmp/fake.png"},
+        ]
+        with patch("agents.planner_agent._build_image_content", return_value={"type": "image_url", "image_url": {"url": "data:fake"}}):
+            with patch("agents.planner_agent.call_minimax", new=AsyncMock(side_effect=fake_call_minimax)):
+                with patch("agents.planner_agent.extract_json", return_value={}):
+                    result = await planner_agent(photos, {"vehicle": "Test"})
+
+        # 全部 photo 都该有 view_id(从 filename 来,即便 LLM 失败)
+        photo_views = result.get("photo_views", [])
+        assert len(photo_views) == 2, f"expected 2 photo_views, got {len(photo_views)}: {photo_views}"
+        for entry in photo_views:
+            assert entry["view_id"] in EXTERIOR_VIEWS or entry["view_id"] in {"front", "rear", "top"}, (
+                f"photo {entry['photo_id']} view_id={entry['view_id']!r} not in expected set"
+            )

@@ -1,35 +1,52 @@
-"""Extract vehicle info from auxiliary photos such as license and VIN labels."""
+"""Extract vehicle info from auxiliary photos — deterministic.
+
+DAMAGE_RECOGNITION_POLICY §1.6 / 步骤 5: 把辅助信息(行驶证/VIN/铭牌)的提取
+从 LLM 改为纯确定性。VIN 用 17 位正则匹配,WMI(前 3 位)用字典查表得到 brand。
+
+完全无 LLM 调用、无 OCR(后续 PR 可加 tesseract),仅靠文件名启发式 + VIN 字典。
+"""
 
 import re
-from typing import Any, Dict, List, Optional
-
-from agents.minimax_client import call_minimax, build_image_content, extract_json
+from typing import Any, Dict, List
 
 
-_SYSTEM_PROMPT = """你是车辆信息识别专家。给定一张车辆证件照片或车辆铭牌/VIN照片，请提取以下字段：
+# VIN 17 位: 大写字母 + 数字,排除 I/O/Q
+_VIN_REGEX = re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")
 
-输出 JSON 格式：
-{
-  "brand": "品牌中文名或英文名，如保时捷、保时捷Panamera、奔驰、BMW",
-  "model": "车系/型号，如Panamera、C级、3系",
-  "year": "年款，如2019、2020；若无法识别则为空字符串",
-  "vin": "VIN码，17位字母数字组合",
-  "confidence": "high/medium/low",
-  "reason": "判断理由"
+
+# WMI → (中文 brand, 英文 brand) 字典。覆盖最常见的几个主流品牌。
+# 后续 PR 可以扩充到 ~50 个主流 WMI。本次先列 8 个。
+_WMI_TO_BRAND: Dict[str, tuple[str, str]] = {
+    "WBA": ("宝马", "BMW"),
+    "WBS": ("宝马 M", "BMW M"),
+    "WDB": ("奔驰", "Mercedes-Benz"),
+    "WDC": ("奔驰", "Mercedes-Benz"),
+    "WDD": ("奔驰", "Mercedes-Benz"),
+    "WDF": ("奔驰", "Mercedes-Benz"),
+    "WVW": ("大众", "Volkswagen"),
+    "WVG": ("大众", "Volkswagen"),
+    "LFV": ("一汽大众", "FAW-VW"),
+    "LSV": ("上汽大众", "SAIC-VW"),
+    "LGB": ("东风日产", "Dongfeng-Nissan"),
+    "LSG": ("上汽通用", "SAIC-GM"),
+    "LHG": ("广汽本田", "GAC-Honda"),
+    "LVH": ("东风本田", "Dongfeng-Honda"),
+    "LFM": ("一汽丰田", "FAW-Toyota"),
+    "LTV": ("丰田", "Toyota"),
 }
-
-规则：
-1. 行驶证照片：重点关注"品牌型号"字段，例如"保时捷WP0AJ2Z97"应提取 brand=保时捷、model=Panamera
-2. VIN标签照片：提取17位VIN码，若VIN前三位能推断品牌则填写 brand
-3. 若某字段无法识别，使用空字符串""
-4. 不要编造信息，不确定就为空字符串
-"""
 
 
 async def extract_vehicle_info_from_auxiliary_photos(
     photos: List[Dict[str, Any]],
 ) -> Dict[str, str]:
-    """Extract brand/model/year from auxiliary photos.
+    """Extract brand/model/year/vin from auxiliary photos.
+
+    DAMAGE_RECOGNITION_POLICY §1.6 (步骤 5): 纯确定性,无 LLM。
+
+    算法:
+    1. 从每张照片的文件名/id 里找 17 位 VIN(用正则,排除 I/O/Q)
+    2. 用 VIN 前 3 位(WMI)查 _WMI_TO_BRAND 得到 brand
+    3. model / year 留空(后续 PR 用 OCR 补)
 
     Parameters
     ----------
@@ -43,37 +60,70 @@ async def extract_vehicle_info_from_auxiliary_photos(
         ``{"brand": "", "model": "", "year": "", "vin": ""}`` with whatever
         could be inferred. Empty strings for unknown fields.
     """
-    result = {"brand": "", "model": "", "year": "", "vin": ""}
+    result: Dict[str, str] = {"brand": "", "model": "", "year": "", "vin": ""}
     if not photos:
         return result
 
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": _SYSTEM_PROMPT},
-        {"type": "text", "text": f"共 {len(photos)} 张辅助信息照片，请逐张分析并汇总最可能的车辆信息："},
-    ]
+    # 1. 在 filename/id 里找 17 位 VIN
+    vin = ""
     for photo in photos:
-        content.append({"type": "text", "text": f"照片编号: {photo['id']}"})
-        content.append(build_image_content(photo["path"]))
+        for hint in [photo.get("id", ""), photo.get("name", "") or photo.get("path", "")]:
+            match = _VIN_REGEX.search(hint)
+            if match:
+                vin = match.group(0).upper()
+                break
+        if vin:
+            break
 
-    messages = [{"role": "user", "content": content}]
+    # 2. 用 WMI 查 brand
+    brand_cn = brand_en = ""
+    if len(vin) >= 3:
+        wmi = vin[:3]
+        if wmi in _WMI_TO_BRAND:
+            brand_cn, brand_en = _WMI_TO_BRAND[wmi]
 
-    raw = await call_minimax(messages, temperature=0.1, max_tokens=1500)
-    extracted = extract_json(raw)
-    if not isinstance(extracted, dict):
-        return result
+    # 3. 用文件名启发式补 brand(若 VIN 没匹配)
+    if not brand_cn:
+        lowered = " ".join(
+            str(photo.get("id", "")) + " " + str(photo.get("name", ""))
+            for photo in photos
+        ).lower()
+        # 中文品牌关键词
+        brand_keywords = {
+            "宝马": ("宝马", "BMW"),
+            "奔驰": ("奔驰", "Mercedes-Benz"),
+            "大众": ("大众", "Volkswagen"),
+            "丰田": ("丰田", "Toyota"),
+            "本田": ("本田", "Honda"),
+            "日产": ("日产", "Nissan"),
+            "奥迪": ("奥迪", "Audi"),
+            "保时捷": ("保时捷", "Porsche"),
+            "蔚来": ("蔚来", "NIO"),
+            "特斯拉": ("特斯拉", "Tesla"),
+            "tesla": ("特斯拉", "Tesla"),
+            "bmw": ("宝马", "BMW"),
+            "mercedes": ("奔驰", "Mercedes-Benz"),
+        }
+        for keyword, (cn, en) in brand_keywords.items():
+            if keyword in lowered:
+                brand_cn, brand_en = cn, en
+                break
 
-    for key in result:
-        value = extracted.get(key)
-        if isinstance(value, str):
-            result[key] = value.strip()
+    # 4. 用文件名启发式补 year(若 VIN 没匹配)
+    year = ""
+    for photo in photos:
+        for hint in [photo.get("id", ""), photo.get("name", "") or photo.get("path", "")]:
+            # 找 4 位年份(1990-2030)
+            year_match = re.search(r"\b(199\d|20[0-3]\d)\b", hint)
+            if year_match:
+                year = year_match.group(0)
+                break
+        if year:
+            break
 
-    # Clean obvious noise
-    if result["year"] and not re.match(r"^\d{4}$", result["year"]):
-        result["year"] = ""
-
-    if result["vin"]:
-        result["vin"] = result["vin"].upper().strip()
-        if len(result["vin"]) != 17:
-            result["vin"] = ""
+    result["vin"] = vin
+    result["brand"] = brand_cn
+    result["model"] = ""  # 当前无 OCR,留空(后续 PR 补)
+    result["year"] = year
 
     return result
