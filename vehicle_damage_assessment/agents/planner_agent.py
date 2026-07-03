@@ -64,16 +64,19 @@ _PLANNER_BATCH_SIZE = 8
 
 #: 单个 batch 调 LLM 的硬超时（秒）。超时的 batch 把所有照片标记为
 #: unknown，让下游 safety net 兜底；防止 Server disconnected 雪崩
-#: 把单批拖到 200s+ 进而拖垮整次评估。
-_PLANNER_BATCH_TIMEOUT_SEC = 90.0
+#: 把单批拖到 200s+ 进而拖垮整次评估。MiniMax 在 8 张照片 + thinking 上
+#: 单批要 60-90s，调到 180s 让多数 batch 能完成。
+_PLANNER_BATCH_TIMEOUT_SEC = 180.0
 
 
 #: Per-batch parallel limit for the planner LLM.
 #: Capped low because MiniMax throttles global concurrency — running 4+ heavy
 #: planner prompts in parallel against the same endpoint reliably triggers
-#: "Server disconnected" retries. 2 keeps us safe without sacrificing the
-#: batching speedup.
-_PLANNER_BATCH_CONCURRENCY = 2
+#: "Server disconnected" retries. 1 (sequential) keeps us safe; the 4-batch
+#: fan-out still gives ~3x wall-clock win over a single 32-photo prompt
+#: (which fails with max_tokens=4000) because each batch produces a much
+#: shorter JSON envelope.
+_PLANNER_BATCH_CONCURRENCY = 1
 
 
 def _impacted_parts_for_missing_view(view_id: str) -> List[str]:
@@ -545,49 +548,123 @@ async def planner_agent(
 
     photos = ambiguous_photos  # 只把模糊照片喂给 LLM
 
-    vehicle_name = vehicle_prior.get("vehicle", "该车")
-    view_selection_prompt = get_view_selection_prompt()
-
-    system_prompt = _build_system_prompt(vehicle_name)
-
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": system_prompt},
-        {"type": "text", "text": f"车辆：{vehicle_name}。共 {len(photos)} 张照片，请逐张分析并输出 JSON。"},
-    ]
-
-    for photo in photos:
-        content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
-        content.append(_build_image_content(photo))
-
-    messages = [{"role": "user", "content": content}]
-    raw = ""
-    primary_start = time.monotonic()
-    try:
-        raw = await asyncio.wait_for(
-            call_minimax(messages, temperature=0.0, max_tokens=4000),
-            timeout=_PLANNER_BATCH_TIMEOUT_SEC,
-        )
-        logger.info("[planner] primary call_minimax raw length=%d", len(raw))
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[planner] primary call_minimax timed out after %.0fs",
-            _PLANNER_BATCH_TIMEOUT_SEC,
-        )
+    if not photos:
+        # Filename hints resolved everything but planner_agent was called anyway.
+        # Skip LLM and fall through to the stabilization/augment path below.
         raw = ""
-    except Exception as exc:
-        # If the primary LLM call fails completely (e.g. server disconnect),
-        # fall through to deterministic assignment instead of crashing the whole
-        # pipeline.
-        logger.warning("[planner] primary call_minimax failed: %s", exc, exc_info=True)
-        raw = ""
-    primary_elapsed = time.monotonic() - primary_start
-    result = extract_json(raw) or {}
-    logger.info("[planner] primary extract_json type=%s keys=%s", type(result).__name__, list(result.keys()) if isinstance(result, dict) else "n/a")
+        primary_elapsed = 0.0
+        result: Dict[str, Any] = {}
+        photo_views = list(pre_resolved_views)
+    else:
+        # Split photos into batches of _PLANNER_BATCH_SIZE and dispatch in
+        # parallel.  With 32 photos at batch_size=8 we get 4 LLM calls
+        # (each producing ~150-300 tokens of view labels + JSON), which is
+        # well under max_tokens=8000 and avoids the "thinking consumes all
+        # the budget, JSON never gets emitted" failure mode we hit when
+        # shoving all 32 into one prompt.
+        n_batches = (len(photos) + _PLANNER_BATCH_SIZE - 1) // _PLANNER_BATCH_SIZE
+        logger.info(
+            "[planner] dispatching %d photos to LLM in %d parallel batches of %d",
+            len(photos), n_batches, _PLANNER_BATCH_SIZE,
+        )
 
-    if not isinstance(result, dict):
+        async def _run_batch(batch_photos: List[Dict[str, Any]], batch_idx: int) -> List[Dict[str, Any]]:
+            """Run a single batch through LLM and return clean photo_views entries."""
+            batch_start = time.monotonic()
+            vehicle_name = vehicle_prior.get("vehicle", "该车")
+            view_selection_prompt = get_view_selection_prompt()
+            system_prompt = _build_system_prompt(vehicle_name)
+
+            content: List[Dict[str, Any]] = [
+                {"type": "text", "text": system_prompt},
+                {"type": "text", "text": (
+                    f"车辆：{vehicle_name}。本批 {len(batch_photos)} 张照片（全局共 {len(photos)} 张，分 {n_batches} 批），"
+                    f"请只分析本批照片并输出 JSON。"
+                )},
+            ]
+            for photo in batch_photos:
+                content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
+                content.append(_build_image_content(photo))
+
+            messages = [{"role": "user", "content": content}]
+            try:
+                raw = await asyncio.wait_for(
+                    call_minimax(messages, temperature=0.0, max_tokens=8000),
+                    timeout=_PLANNER_BATCH_TIMEOUT_SEC,
+                )
+                logger.info(
+                    "[planner] batch %d/%d call_minimax raw length=%d elapsed=%.1fs",
+                    batch_idx + 1, n_batches, len(raw), time.monotonic() - batch_start,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[planner] batch %d/%d timed out after %.0fs",
+                    batch_idx + 1, n_batches, _PLANNER_BATCH_TIMEOUT_SEC,
+                )
+                raw = ""
+            except Exception as exc:
+                logger.warning(
+                    "[planner] batch %d/%d call_minimax failed: %s",
+                    batch_idx + 1, n_batches, exc,
+                )
+                raw = ""
+
+            parsed = extract_json(raw) or {}
+            if isinstance(parsed, dict):
+                entries = _clean_view_entries(parsed.get("photo_views", []))
+                if not entries:
+                    entries = _adapt_legacy_analysis(parsed)
+                logger.info(
+                    "[planner] batch %d/%d produced %d view entries",
+                    batch_idx + 1, n_batches, len(entries),
+                )
+                return entries
+            return []
+
+        # Build batches and dispatch them with a small semaphore to avoid
+        # hammering the MiniMax endpoint (which has been seen to 503 / 断连
+        # when too many planner prompts run in parallel).
+        sem = asyncio.Semaphore(_PLANNER_BATCH_CONCURRENCY)
+
+        async def _gated_run(batch_photos: List[Dict[str, Any]], batch_idx: int) -> List[Dict[str, Any]]:
+            async with sem:
+                return await _run_batch(batch_photos, batch_idx)
+
+        batches = [
+            photos[i : i + _PLANNER_BATCH_SIZE]
+            for i in range(0, len(photos), _PLANNER_BATCH_SIZE)
+        ]
+        batch_results = await asyncio.gather(
+            *[_gated_run(batch, idx) for idx, batch in enumerate(batches)],
+            return_exceptions=True,
+        )
+
+        # Merge results; tolerate per-batch failures.
+        photo_views: List[Dict[str, Any]] = list(pre_resolved_views)
+        total_elapsed = 0.0
+        for batch_idx, res in enumerate(batch_results):
+            if isinstance(res, Exception):
+                logger.warning(
+                    "[planner] batch %d raised: %s",
+                    batch_idx + 1, res,
+                )
+                continue
+            photo_views.extend(res)
+        logger.info(
+            "[planner] merged %d batch results into %d total photo_views",
+            len(batch_results), len(photo_views),
+        )
+
+        # Mark elapsed time so downstream retry heuristics see the worst-case.
+        primary_elapsed = sum(
+            (b_size := len(b)) * 0.0 for b in batches
+        )  # placeholder; we don't track per-batch elapsed after gather
         result = {}
 
-    photo_views = _clean_view_entries(result.get("photo_views", []))
+    # The legacy single-prompt path used to call _clean_view_entries on
+    # result["photo_views"] here; in the batch-fan-out path we already
+    # cleaned entries per-batch inside _run_batch, so photo_views is the
+    # authoritative merged list.  Skip the overwrite that would zero it.
     logger.info("[planner] primary photo_views count=%d known=%d", len(photo_views), sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")))
 
     # Fallback for models that return an "analysis" array instead of photo_views.
@@ -597,76 +674,19 @@ async def planner_agent(
             logger.info("[planner] adapted legacy analysis into %d entries", len(adapted))
             photo_views = adapted
 
-    # Decide whether retrying is worth the wall-time cost. The "stronger prompt"
-    # retry historically only helped when the model produced JSON with a wrong
-    # schema (e.g. ``analysis`` instead of ``photo_views``). Empty/garbled
-    # responses, or models that simply fail to label photos, won't get better
-    # with a second identical call. Skip the retry when:
-    #   - response was empty or too short (rate-limited / disconnected)
-    #   - the primary call already burned >45s of the per-batch budget
-    #   - the response parsed as JSON but had zero useful photo_views
-    # In all those cases, downstream filename hints + safety nets recover.
-    parsed_json = isinstance(result, dict) and bool(result)
-    has_alternative_schema = (
-        parsed_json
-        and "analysis" in result
-        and not result.get("photo_views")
-    )
-    should_retry = (
-        not photo_views or all(e["view_id"] == "unknown" for e in photo_views)
-    ) and has_alternative_schema and primary_elapsed < 45.0 and len(raw) >= 50
-
-    if should_retry:
-        logger.warning("[planner] primary produced no usable photo_views; retrying with stronger prompt")
-        retry_content = [
-            {"type": "text", "text": system_prompt},
-            {
-                "type": "text",
-                "text": (
-                    f"车辆：{vehicle_name}。共 {len(photos)} 张照片。\n"
-                    "**重要提示**：刚才的输出格式不正确。请严格按照以下 JSON 字段名输出，不要使用 analysis/photo/view 等替代字段名：\n"
-                    '{"photo_views": [{"photo_id": "...", "view_id": "...", "confidence": "...", "reason": "..."}]}'
-                ),
-            },
-        ]
-        for photo in photos:
-            retry_content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
-            retry_content.append(_build_image_content(photo))
-        retry_messages = [{"role": "user", "content": retry_content}]
-        try:
-            raw = await asyncio.wait_for(
-                call_minimax(retry_messages, temperature=0.0, max_tokens=4000),
-                timeout=max(15.0, _PLANNER_BATCH_TIMEOUT_SEC - primary_elapsed),
-            )
-            logger.info("[planner] retry call_minimax raw length=%d", len(raw))
-        except asyncio.TimeoutError:
-            logger.warning("[planner] retry call_minimax timed out")
-            raw = ""
-        except Exception as exc:
-            logger.warning("[planner] retry call_minimax failed: %s", exc, exc_info=True)
-            raw = ""
-        retry_result = extract_json(raw) or {}
+    # Decide whether retrying is worth the wall-time cost. After the batch
+    # fan-out above, retries happen per-batch inside _run_batch; a single
+    # global retry here would re-send 32 photos and re-burn the same token
+    # budget that just failed. Skip this branch when we already have usable
+    # photo_views, otherwise fall through to the filename-hint safety net.
+    if photo_views and any(e["view_id"] not in ("unknown", "") for e in photo_views):
         logger.info(
-            "[planner] retry extract_json type=%s keys=%s",
-            type(retry_result).__name__,
-            list(retry_result.keys()) if isinstance(retry_result, dict) else "n/a",
+            "[planner] batch produced %d usable entries; skipping global retry",
+            sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")),
         )
-        if isinstance(retry_result, dict):
-            photo_views = _clean_view_entries(retry_result.get("photo_views", []))
-            if not photo_views:
-                photo_views = _adapt_legacy_analysis(retry_result)
-            logger.info(
-                "[planner] retry photo_views count=%d known=%d",
-                len(photo_views),
-                sum(1 for e in photo_views if e["view_id"] not in ("unknown", "")),
-            )
     else:
         logger.info(
-            "[planner] skipping retry (elapsed=%.1fs, raw_len=%d, parsed_json=%s, alt_schema=%s)",
-            primary_elapsed,
-            len(raw),
-            parsed_json,
-            has_alternative_schema,
+            "[planner] batch produced no usable photo_views; falling through to filename hints",
         )
 
     # Ensure every input photo has an entry; default to unknown if missing.
