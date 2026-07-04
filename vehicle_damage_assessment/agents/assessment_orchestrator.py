@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import traceback
 from typing import Any, Dict, List
 
 from agents import build_vehicle_topology, vehicle_prior_agent
@@ -371,31 +370,27 @@ def _merge_subagent_results(
 def _merge_two_states(a: PartActualState, b: PartActualState) -> PartActualState:
     """Merge two PartActualState objects conservatively."""
 
-    # Status priority: missing > damaged > uncertain > intact
-    status_priority = {
-        Status.MISSING: 4,
-        Status.DAMAGED: 3,
-        Status.UNCERTAIN: 2,
-        Status.INTACT: 1,
-        Status.NOT_APPLICABLE: 0,
-    }
-    best_status = a.status if status_priority.get(a.status, 0) >= status_priority.get(b.status, 0) else b.status
+    # Priority maps come from the centralized rules loader so the orchestrator
+    # stays in lockstep with the synthesizer and topology_comparator.
+    # The loader returns string keys ("damaged", "severe", "high", ...); because
+    # Status and DamageLevel are str enums, Status.DAMAGED == "damaged", so dict
+    # lookups with either form yield the same bucket.
+    best_status = (
+        a.status
+        if _STATUS_PRIORITY.get(a.status, 0) >= _STATUS_PRIORITY.get(b.status, 0)
+        else b.status
+    )
 
-    # Damage level priority
-    level_priority = {
-        DamageLevel.SEVERE: 4,
-        DamageLevel.MODERATE: 3,
-        DamageLevel.LIGHT: 2,
-        DamageLevel.UNKNOWN: 1,
-        DamageLevel.NONE: 0,
-    }
-    best_level = a.damage_level if level_priority.get(a.damage_level, 0) >= level_priority.get(b.damage_level, 0) else b.damage_level
+    best_level = (
+        a.damage_level
+        if _LEVEL_PRIORITY.get(a.damage_level, 0) >= _LEVEL_PRIORITY.get(b.damage_level, 0)
+        else b.damage_level
+    )
 
     # Confidence: lower is worse
-    confidence_priority = {"high": 2, "medium": 1, "low": 0}
     worst_confidence = (
         a.confidence
-        if confidence_priority.get(a.confidence, 0) <= confidence_priority.get(b.confidence, 0)
+        if _CONFIDENCE_PRIORITY.get(a.confidence, 0) <= _CONFIDENCE_PRIORITY.get(b.confidence, 0)
         else b.confidence
     )
 
@@ -441,5 +436,11 @@ def _merge_two_states(a: PartActualState, b: PartActualState) -> PartActualState
     )
 
 
-# Avoid circular import issues by importing Status/DamageLevel at the bottom.
-from models.part_state import Status, DamageLevel
+# Load priority maps from the centralized rules config so the orchestrator's
+# merge logic stays aligned with the synthesizer and topology_comparator.
+from agents.rules import load_priority_map as _load_priority_map
+
+_PRIORITIES = _load_priority_map()
+_STATUS_PRIORITY: Dict[Any, int] = _PRIORITIES["status"]
+_LEVEL_PRIORITY: Dict[Any, int] = _PRIORITIES["level"]
+_CONFIDENCE_PRIORITY: Dict[str, int] = _PRIORITIES["confidence"]

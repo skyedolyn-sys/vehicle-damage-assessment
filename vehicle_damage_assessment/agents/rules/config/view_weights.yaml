@@ -86,6 +86,10 @@ default:
       right_90: 0
       rear_right_45: 1
       front_right_45: 1
+    fender_front_right:
+      front: 0
+      front_right_45: 0
+      right_90: 0
 
   primary_view:
     door_front_left:

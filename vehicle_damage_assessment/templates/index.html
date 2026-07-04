@@ -5,87 +5,384 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>车辆外部损伤识别 API 控制台</title>
     <style>
+        :root {
+            --bg: #f3f5f9;
+            --surface: #ffffff;
+            --text-primary: #1a1f2c;
+            --text-secondary: #5b6478;
+            --text-tertiary: #8b94a7;
+            --border: #e6e9f0;
+            --border-strong: #c9cfdb;
+            --accent: #1e6cf2;
+            --accent-soft: #e7efff;
+            --success: #1f9d55;
+            --warning: #d18a13;
+            --danger: #d4423b;
+            --radius-card: 14px;
+            --radius-input: 8px;
+            --shadow-card: 0 1px 2px rgba(20, 30, 60, 0.04), 0 8px 24px rgba(20, 30, 60, 0.04);
+        }
+
         * { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f5f7fa;
-            color: #1a1a1a;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                "Hiragino Sans GB", "Microsoft YaHei", Roboto, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text-primary);
+            line-height: 1.55;
+            font-size: 15px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 56px 24px 96px;
+        }
+
+        header { text-align: center; margin-bottom: 40px; }
+        header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: var(--text-primary);
+        }
+        header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 10px;
+        }
+
+        /* 通用卡片 */
+        .card {
+            background: var(--surface);
+            border-radius: var(--radius-card);
+            padding: 28px 32px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-card);
+        }
+        .card-tight { padding: 20px 24px; }
+
+        /* 卡片标题 — 蓝色圆形序号徽章 + 文字 */
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 17px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 18px;
+        }
+        .badge-num {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+
+        /* 表单 */
+        .form-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .form-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-input);
+            font-size: 14px;
+            color: var(--text-primary);
+            background: var(--surface);
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        .form-group input::placeholder { color: var(--text-tertiary); }
+
+        /* 上传区 */
+        .upload-area {
+            border: 1.5px dotted var(--border-strong);
+            border-radius: 12px;
+            padding: 56px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+            background: var(--surface);
+        }
+        .upload-area:hover,
+        .upload-area.is-dragover {
+            border-color: var(--accent);
+            background: #f7faff;
+        }
+        .upload-area input { display: none; }
+        .upload-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: #f1f4fa;
+            margin: 0 auto 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+        }
+        .upload-area .upload-primary {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+        .upload-area .upload-secondary {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+        .upload-area .upload-formats {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-bottom: 18px;
+        }
+
+        /* 按钮 */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px 22px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+            line-height: 1;
+        }
+        .btn-text {
+            color: var(--accent);
+            background: var(--surface);
+            border-color: var(--accent-soft);
+        }
+        .btn-text:hover {
+            background: var(--accent-soft);
+            border-color: var(--accent);
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+        }
+        .btn-primary:hover { background: #1a5ed8; }
+        .btn-primary:disabled {
+            background: #c4cee0;
+            cursor: not-allowed;
+        }
+        .btn-block {
+            width: 100%;
+            padding: 14px;
+            font-size: 15px;
+            border-radius: 10px;
+        }
+
+        /* 文件列表 */
+        .file-list {
+            margin-top: 14px;
+            padding: 12px 14px;
+            background: #f7f9fc;
+            border-radius: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .file-list .file-name-list {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            max-height: 96px;
+            overflow-y: auto;
+            line-height: 1.7;
+        }
+
+        /* 进度 */
+        .progress { margin-top: 6px; }
+        .progress-bar {
+            height: 6px;
+            background: #e9edf5;
+            border-radius: 999px;
+            overflow: hidden;
+            margin-bottom: 16px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--accent);
+            width: 0%;
+            transition: width 0.3s;
+        }
+        .progress-steps {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+        .progress-step {
+            flex: 1;
+            text-align: center;
+            padding: 4px;
+        }
+        .progress-step.active {
+            color: var(--accent);
+            font-weight: 600;
+        }
+        .progress-step.done { color: var(--success); }
+
+        /* 日志 */
+        .log {
+            background: #1a1f2c;
+            color: #d4dae5;
+            padding: 14px 16px;
+            border-radius: 8px;
+            font-family: "SF Mono", Menlo, Monaco, "Courier New", monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 16px;
             line-height: 1.6;
         }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 24px;
+        .log .timestamp { color: #6b748a; margin-right: 8px; }
+
+        /* 结果 */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 24px;
         }
-        header { text-align: center; margin-bottom: 32px; }
-        header h1 { font-size: 28px; color: #1a1a1a; }
-        header p { color: #666; margin-top: 8px; }
-        .card {
-            background: white;
-            border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        .summary-card {
+            background: #f7f9fc;
+            border-radius: 10px;
+            padding: 16px;
+            text-align: center;
         }
-        .card h2 { font-size: 18px; margin-bottom: 16px; color: #333; }
-        .form-row { display: flex; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
-        .form-group { flex: 1; min-width: 180px; }
-        .form-group label { display: block; margin-bottom: 6px; font-size: 14px; color: #555; }
-        .form-group input {
-            width: 100%; padding: 10px 12px; border: 1px solid #ddd;
-            border-radius: 8px; font-size: 14px;
+        .summary-card .value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.1;
         }
-        .upload-area {
-            border: 2px dashed #c5c9d0; border-radius: 12px; padding: 40px;
-            text-align: center; cursor: pointer; transition: all 0.2s;
+        .summary-card .label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 6px;
         }
-        .upload-area:hover { border-color: #4a90e2; background: #f8fbff; }
-        .upload-area input { display: none; }
-        .upload-area .icon { font-size: 40px; margin-bottom: 12px; }
-        .upload-area p { color: #666; }
-        .btn {
-            display: inline-block; padding: 12px 28px; background: #4a90e2;
-            color: white; border: none; border-radius: 8px; font-size: 15px;
-            cursor: pointer; transition: background 0.2s;
+        .summary-card.severe .value { color: var(--danger); }
+        .summary-card.warning .value { color: var(--warning); }
+        .summary-card.success .value { color: var(--success); }
+
+        .parts-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
         }
-        .btn:hover { background: #357abd; }
-        .btn:disabled { background: #a0c3e8; cursor: not-allowed; }
-        .progress { margin-top: 20px; }
-        .progress-bar { height: 8px; background: #e8ecf1; border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
-        .progress-fill { height: 100%; background: #4a90e2; width: 0%; transition: width 0.3s; }
-        .progress-steps { display: flex; justify-content: space-between; font-size: 13px; color: #888; }
-        .progress-step { flex: 1; text-align: center; padding: 4px; }
-        .progress-step.active { color: #4a90e2; font-weight: 600; }
-        .progress-step.done { color: #2e9d5e; }
-        .log {
-            background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px;
-            font-family: "Menlo", "Monaco", "Courier New", monospace; font-size: 13px;
-            max-height: 200px; overflow-y: auto; margin-top: 16px;
+        .parts-table th,
+        .parts-table td {
+            padding: 12px 14px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
         }
-        .log .timestamp { color: #858585; margin-right: 8px; }
-        .result-section { margin-top: 24px; }
-        .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin-bottom: 24px; }
-        .summary-card { background: #f8f9fb; border-radius: 10px; padding: 16px; text-align: center; }
-        .summary-card .value { font-size: 28px; font-weight: 700; color: #1a1a1a; }
-        .summary-card .label { font-size: 13px; color: #666; margin-top: 4px; }
-        .summary-card.severe .value { color: #d9534f; }
-        .summary-card.warning .value { color: #f0ad4e; }
-        .parts-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        .parts-table th, .parts-table td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        .parts-table th { background: #f8f9fb; font-weight: 600; color: #555; }
-        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-        .status-intact { background: #d4edda; color: #155724; }
-        .status-damaged { background: #f8d7da; color: #721c24; }
-        .status-missing { background: #f8d7da; color: #721c24; }
-        .status-uncertain { background: #fff3cd; color: #856404; }
-        .level-severe { color: #d9534f; font-weight: 600; }
-        .level-moderate { color: #f0ad4e; font-weight: 600; }
-        .level-light { color: #5bc0de; font-weight: 600; }
-        .level-none { color: #999; }
-        .uncertain-list { background: #fffbea; border-left: 4px solid #f0ad4e; padding: 16px; border-radius: 8px; margin-top: 16px; }
-        .uncertain-list h3 { font-size: 15px; margin-bottom: 12px; color: #856404; }
-        .json-output { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto; max-height: 400px; overflow-y: auto; }
+        .parts-table th {
+            background: #f7f9fc;
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .parts-table tbody tr:last-child td { border-bottom: none; }
+
+        .status-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-intact { background: #e1f4e9; color: #166c3d; }
+        .status-damaged { background: #fde2e0; color: #a82a25; }
+        .status-missing { background: #fde2e0; color: #a82a25; }
+        .status-uncertain { background: #fdf3d8; color: #8a5b07; }
+
+        .level-severe { color: var(--danger); font-weight: 600; }
+        .level-moderate { color: var(--warning); font-weight: 600; }
+        .level-light { color: #1f8fbf; font-weight: 600; }
+        .level-none { color: var(--text-tertiary); }
+
+        .uncertain-block {
+            background: #fffbea;
+            border-left: 3px solid var(--warning);
+            padding: 16px 18px;
+            border-radius: 8px;
+            margin-top: 18px;
+        }
+        .uncertain-block h3 {
+            font-size: 14px;
+            color: #8a5b07;
+            margin-bottom: 12px;
+        }
+        .uncertain-item {
+            padding: 8px 0;
+            border-bottom: 1px dashed #f0e2b8;
+            font-size: 13px;
+        }
+        .uncertain-item:last-child { border-bottom: none; }
+
+        .json-output {
+            background: #1a1f2c;
+            color: #d4dae5;
+            padding: 16px;
+            border-radius: 8px;
+            font-family: "SF Mono", Menlo, Monaco, monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            max-height: 400px;
+            overflow-y: auto;
+            line-height: 1.5;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 24px 0 12px;
+        }
+
         .hidden { display: none; }
+
+        /* 移动端 ≤ 640px */
+        @media (max-width: 640px) {
+            .container { padding: 32px 16px 64px; }
+            header h1 { font-size: 22px; }
+            header p { font-size: 13px; }
+            .card { padding: 22px 20px; border-radius: 12px; }
+            .form-row { grid-template-columns: 1fr; gap: 14px; }
+            .upload-area { padding: 40px 20px; }
+            .upload-icon { width: 40px; height: 40px; font-size: 20px; }
+            .parts-table { font-size: 13px; }
+            .parts-table th, .parts-table td { padding: 10px 8px; }
+        }
     </style>
 </head>
 <body>
@@ -95,8 +392,12 @@
             <p>纯后端内置调试页面 · 上传车辆照片文件夹进行结构化损伤识别</p>
         </header>
 
+        <!-- 1. 车辆信息 -->
         <div class="card">
-            <h2>1. 填写车辆信息</h2>
+            <div class="card-title">
+                <span class="badge-num">1</span>
+                填写车辆信息
+            </div>
             <div class="form-row">
                 <div class="form-group">
                     <label>品牌（可选）</label>
@@ -113,23 +414,37 @@
             </div>
         </div>
 
+        <!-- 2. 上传照片文件夹 -->
         <div class="card">
-            <h2>2. 上传照片文件夹</h2>
+            <div class="card-title">
+                <span class="badge-num">2</span>
+                上传照片文件夹
+            </div>
             <label class="upload-area" id="uploadArea">
                 <input type="file" id="folderInput" webkitdirectory directory multiple>
-                <div class="icon">📁</div>
-                <p>点击选择文件夹，或拖拽文件夹到此处</p>
-                <p style="font-size: 13px; color: #999; margin-top: 8px;">支持 .png .jpg .jpeg .webp .gif .bmp</p>
+                <div class="upload-icon">📁</div>
+                <div class="upload-primary">点击或拖拽上传照片文件夹</div>
+                <div class="upload-secondary">请选择包含车辆外观照片的整个文件夹</div>
+                <div class="upload-formats">支持 .png .jpg .jpeg .webp .gif .bmp</div>
+                <span class="btn btn-text" id="pickFolderBtn">选择文件夹</span>
             </label>
-            <div id="fileList" style="margin-top: 16px; font-size: 14px; color: #555;"></div>
+            <div class="file-list hidden" id="fileList">
+                <span id="fileSummary"></span>
+                <div class="file-name-list hidden" id="fileNameList"></div>
+            </div>
         </div>
 
-        <div class="card" style="text-align: center;">
-            <button class="btn" id="startBtn" disabled>开始识别</button>
+        <!-- 3. 开始识别 -->
+        <div class="card card-tight" style="text-align: center;">
+            <button class="btn btn-primary btn-block" id="startBtn" disabled>开始识别</button>
         </div>
 
+        <!-- 进度 -->
         <div class="card hidden" id="progressCard">
-            <h2>识别进度</h2>
+            <div class="card-title">
+                <span class="badge-num">3</span>
+                识别进度
+            </div>
             <div class="progress">
                 <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
                 <div class="progress-steps" id="progressSteps">
@@ -143,26 +458,38 @@
             <div class="log" id="log"></div>
         </div>
 
+        <!-- 结果 -->
         <div class="card hidden" id="resultCard">
-            <h2>识别结果</h2>
-            <div id="resultSummary"></div>
-            <div class="result-section">
-                <h3>部件损伤清单</h3>
-                <table class="parts-table">
-                    <thead><tr><th>部位</th><th>区域</th><th>状态</th><th>损伤等级</th><th>置信度</th><th>证据照片</th></tr></thead>
-                    <tbody id="partsTableBody"></tbody>
-                </table>
+            <div class="card-title">
+                <span class="badge-num">4</span>
+                识别结果
             </div>
-            <div class="result-section hidden" id="uncertainSection">
-                <div class="uncertain-list">
+            <div id="resultSummary"></div>
+
+            <div class="section-title">部件损伤清单</div>
+            <table class="parts-table">
+                <thead>
+                    <tr>
+                        <th>部位</th>
+                        <th>区域</th>
+                        <th>状态</th>
+                        <th>损伤等级</th>
+                        <th>置信度</th>
+                        <th>证据照片</th>
+                    </tr>
+                </thead>
+                <tbody id="partsTableBody"></tbody>
+            </table>
+
+            <div class="hidden" id="uncertainSection">
+                <div class="uncertain-block">
                     <h3>⚠️ 不确定项 / 需人工复核</h3>
                     <div id="uncertainList"></div>
                 </div>
             </div>
-            <div class="result-section">
-                <h3>完整 JSON 输出</h3>
-                <pre class="json-output" id="jsonOutput"></pre>
-            </div>
+
+            <div class="section-title">完整 JSON 输出</div>
+            <pre class="json-output" id="jsonOutput"></pre>
         </div>
     </div>
 
@@ -172,39 +499,73 @@
 
         const folderInput = document.getElementById('folderInput');
         const uploadArea = document.getElementById('uploadArea');
+        const pickFolderBtn = document.getElementById('pickFolderBtn');
         const fileList = document.getElementById('fileList');
+        const fileSummary = document.getElementById('fileSummary');
+        const fileNameList = document.getElementById('fileNameList');
         const startBtn = document.getElementById('startBtn');
         const progressCard = document.getElementById('progressCard');
         const resultCard = document.getElementById('resultCard');
         const progressFill = document.getElementById('progressFill');
         const log = document.getElementById('log');
 
-        folderInput.addEventListener('change', (e) => {
-            selectedFiles = Array.from(e.target.files).filter(f =>
+        function acceptFiles(fileArr) {
+            selectedFiles = fileArr.filter(f =>
                 /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(f.name)
             );
-            fileList.textContent = `已选择 ${selectedFiles.length} 张照片`;
-            startBtn.disabled = selectedFiles.length === 0;
+            if (selectedFiles.length === 0) {
+                fileList.classList.add('hidden');
+                startBtn.disabled = true;
+                return;
+            }
+            fileList.classList.remove('hidden');
+            fileSummary.textContent = `已选择 ${selectedFiles.length} 张照片`;
+            const names = selectedFiles.slice(0, 50).map(f => f.name);
+            fileNameList.textContent =
+                names.join(' · ') +
+                (selectedFiles.length > 50 ? ` · …(共 ${selectedFiles.length} 张)` : '');
+            fileNameList.classList.remove('hidden');
+            startBtn.disabled = false;
+        }
+
+        folderInput.addEventListener('change', (e) => {
+            acceptFiles(Array.from(e.target.files));
         });
 
-        uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.style.borderColor = '#4a90e2'; });
-        uploadArea.addEventListener('dragleave', () => { uploadArea.style.borderColor = '#c5c9d0'; });
+        // "选择文件夹" 按钮 — 触发隐藏的 file input
+        pickFolderBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            folderInput.click();
+        });
+
+        // 拖拽
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('is-dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('is-dragover');
+        });
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
-            uploadArea.style.borderColor = '#c5c9d0';
-            selectedFiles = Array.from(e.dataTransfer.files).filter(f =>
-                /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(f.name)
-            );
-            fileList.textContent = `已选择 ${selectedFiles.length} 张照片`;
-            startBtn.disabled = selectedFiles.length === 0;
+            uploadArea.classList.remove('is-dragover');
+            acceptFiles(Array.from(e.dataTransfer.files));
         });
 
         function addLog(message) {
             const time = new Date().toLocaleTimeString();
             const line = document.createElement('div');
-            line.innerHTML = `<span class="timestamp">[${time}]</span>${message}`;
+            line.innerHTML = `<span class="timestamp">[${time}]</span>${escapeHtml(message)}`;
             log.appendChild(line);
             log.scrollTop = log.scrollHeight;
+        }
+
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                '"': '&quot;', "'": '&#39;',
+            }[c]));
         }
 
         function setStep(stepIndex) {
@@ -240,38 +601,36 @@
                 const brand = encodeURIComponent(document.getElementById('brand').value);
                 const model = encodeURIComponent(document.getElementById('model').value);
                 const year = encodeURIComponent(document.getElementById('year').value);
-                const eventSource = new EventSource(`/api/assess/${taskId}?brand=${brand}&model=${model}&year=${year}`);
+                const eventSource = new EventSource(
+                    `/api/assess/${taskId}?brand=${brand}&model=${model}&year=${year}`
+                );
 
                 eventSource.addEventListener('step', (e) => {
                     const data = JSON.parse(e.data);
                     setStep(data.step);
                     addLog(data.message);
                 });
-
                 eventSource.addEventListener('vehicle_prior', (e) => {
                     const data = JSON.parse(e.data);
                     addLog(`车型先验加载完成: ${data.vehicle || ''}`);
                 });
-
                 eventSource.addEventListener('locations', (e) => {
                     const data = JSON.parse(e.data);
                     addLog(`照片定位完成，共 ${data.locations.length} 张`);
                 });
-
                 eventSource.addEventListener('result', (e) => {
                     const data = JSON.parse(e.data);
                     renderResult(data);
                 });
-
-                eventSource.addEventListener('complete', (e) => {
+                eventSource.addEventListener('complete', () => {
                     addLog('识别完成');
                     eventSource.close();
                     startBtn.disabled = false;
                 });
-
                 eventSource.addEventListener('error', (e) => {
-                    const data = JSON.parse(e.data);
-                    addLog(`错误: ${data.message}`);
+                    let msg = '未知错误';
+                    try { msg = JSON.parse(e.data).message; } catch (_) {}
+                    addLog(`错误: ${msg}`);
                     eventSource.close();
                     startBtn.disabled = false;
                 });
@@ -287,27 +646,43 @@
             const isSevere = summary.structural_damage_flag;
 
             document.getElementById('resultSummary').innerHTML = `
-                <div class="summary-cards">
-                    <div class="summary-card ${isSevere ? 'severe' : ''}">
-                        <div class="value">${summary.damaged_parts_count || 0}</div><div class="label">损坏部件</div>
+                <div class="summary-grid">
+                    <div class="summary-card ${isSevere ? 'severe' : 'success'}">
+                        <div class="value">${summary.damaged_parts_count || 0}</div>
+                        <div class="label">损坏部件</div>
                     </div>
                     <div class="summary-card">
-                        <div class="value">${summary.intact_parts_count || 0}</div><div class="label">完好部件</div>
+                        <div class="value">${summary.intact_parts_count || 0}</div>
+                        <div class="label">完好部件</div>
                     </div>
                     <div class="summary-card warning">
-                        <div class="value">${summary.uncertain_parts_count || 0}</div><div class="label">不确定</div>
+                        <div class="value">${summary.uncertain_parts_count || 0}</div>
+                        <div class="label">不确定</div>
                     </div>
                     <div class="summary-card ${summary.missing_parts_count ? 'severe' : ''}">
-                        <div class="value">${summary.missing_parts_count || 0}</div><div class="label">缺失/脱落</div>
+                        <div class="value">${summary.missing_parts_count || 0}</div>
+                        <div class="label">缺失/脱落</div>
                     </div>
                     <div class="summary-card ${isSevere ? 'severe' : ''}">
-                        <div class="value">${summary.overall_severity || '-'}</div><div class="label">整体严重等级</div>
+                        <div class="value">${summary.overall_severity || '-'}</div>
+                        <div class="label">整体严重等级</div>
                     </div>
-                    <div class="summary-card ${isSevere ? 'severe' : ''}">
-                        <div class="value">${isSevere ? '是' : '否'}</div><div class="label">结构性事故</div>
+                    <div class="summary-card ${isSevere ? 'severe' : 'success'}">
+                        <div class="value">${isSevere ? '是' : '否'}</div>
+                        <div class="label">结构性事故</div>
                     </div>
                 </div>
-                ${isSevere ? `<div class="uncertain-list"><strong>⚠️ 触发结构性事故：</strong>${(data.structural_damage_reasoning || {}).description || data.structural_damage_reasoning || ''}</div>` : ''}
+                ${isSevere
+                    ? `<div class="uncertain-block">
+                        <h3>⚠️ 触发结构性事故</h3>
+                        <div>${escapeHtml(
+                            (data.structural_damage_reasoning || {}).description
+                            || data.structural_damage_reasoning
+                            || ''
+                        )}</div>
+                    </div>`
+                    : ''
+                }
             `;
 
             const tbody = document.getElementById('partsTableBody');
@@ -316,13 +691,19 @@
                 const tr = document.createElement('tr');
                 const statusClass = `status-${part.status}`;
                 const levelClass = `level-${part.damage_level}`;
+                const statusText = {
+                    intact: '完好',
+                    damaged: '损坏',
+                    missing: '缺失',
+                    uncertain: '无法判断',
+                }[part.status] || part.status;
                 tr.innerHTML = `
-                    <td>${part.part_name}</td>
-                    <td>${part.part_category}</td>
-                    <td><span class="status-badge ${statusClass}">${part.status === 'intact' ? '完好' : part.status === 'damaged' ? '损坏' : part.status === 'missing' ? '缺失' : '无法判断'}</span></td>
-                    <td class="${levelClass}">${part.damage_level === 'none' ? '-' : part.damage_level}</td>
-                    <td>${part.confidence}</td>
-                    <td>${(part.evidence_photo || []).join(', ') || '-'}</td>
+                    <td>${escapeHtml(part.part_name || '')}</td>
+                    <td>${escapeHtml(part.part_category || '')}</td>
+                    <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                    <td class="${levelClass}">${part.damage_level === 'none' ? '-' : escapeHtml(part.damage_level)}</td>
+                    <td>${escapeHtml(part.confidence || '')}</td>
+                    <td>${(part.evidence_photo || []).map(escapeHtml).join(', ') || '-'}</td>
                 `;
                 tbody.appendChild(tr);
             });
@@ -332,10 +713,10 @@
             if (uncertainItems.length > 0) {
                 uncertainSection.classList.remove('hidden');
                 document.getElementById('uncertainList').innerHTML = uncertainItems.map(item => `
-                    <div class="uncertain-item" style="margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed #f0e2b8;">
-                        <strong>${item.item}</strong>
-                        <p>原因：${item.reason}</p>
-                        <p>建议：${item.suggested_action}</p>
+                    <div class="uncertain-item">
+                        <strong>${escapeHtml(item.item || '')}</strong>
+                        <div>原因：${escapeHtml(item.reason || '')}</div>
+                        <div>建议：${escapeHtml(item.suggested_action || '')}</div>
                     </div>
                 `).join('');
             } else {
@@ -343,6 +724,8 @@
             }
 
             document.getElementById('jsonOutput').textContent = JSON.stringify(data, null, 2);
+            // 平滑滚到结果区
+            resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
     </script>
 </body>

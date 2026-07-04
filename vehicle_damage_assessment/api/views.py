@@ -15,7 +15,6 @@ from typing import Any, Dict, Generator, List
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
-from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 
 from agents import (
@@ -42,8 +41,14 @@ from config import MAX_CONCURRENT_API_CALLS, PHOTO_LOCATOR_BATCH_SIZE
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 
 
+def health(request):
+    """Liveness probe — 返回 ok 用于 load balancer / k8s readiness check。"""
+    return JsonResponse({"status": "ok"})
+
+
 def index(request):
     """Serve the built-in HTML debug console."""
+    from django.shortcuts import render
     return render(request, "index.html")
 
 

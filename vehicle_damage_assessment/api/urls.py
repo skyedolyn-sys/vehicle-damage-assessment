@@ -2,10 +2,11 @@
 
 from django.urls import path
 
-from api.views import assess_stream, index, upload_files
+from api.views import assess_stream, health, index, upload_files
 
 urlpatterns = [
     path("", index, name="index"),
+    path("api/health", health, name="health"),
     path("api/upload", upload_files, name="upload_files"),
     path("api/assess/<str:task_id>", assess_stream, name="assess_stream"),
 ]

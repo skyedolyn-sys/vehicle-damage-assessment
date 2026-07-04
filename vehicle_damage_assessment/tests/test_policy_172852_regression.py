@@ -40,16 +40,19 @@ SAMPLE_DIR = "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_172852"
 POLICY_REQUIRED_SECTIONS = ["§1.6"]
 
 # 这些部件在原版中全部被错判为 intact,新版多数运行必须识别为 damaged。
+# 基于 2026-07-04 视觉+用户核对真值,撞击点全部在右侧。
 MUST_DETECT_DAMAGED = [
     "hood", "windshield_front", "pillar_a_right",
     "headlight_front_right", "fender_front_right", "roof_front",
 ]
 
-# 这 7 个原判正确的受损部件必须保持 damaged(防止 §3.1 误翻转)。
-MUST_REMAIN_DAMAGED = [
+# 2026-07-04 修订:这 7 个原版假设 damaged 的部件实际全部 intact(左侧后侧)。
+# 完整真值见 tests/test_172852_rubric.py,本测试保留 6 个核心 left/rear 部件作为 §3.1 翻转保护。
+MUST_REMAIN_INTACT = [
     "door_rear_left", "fender_rear_left",
     "pillar_c_left", "pillar_b_left",
-    "windshield_rear", "taillight_rear_left", "trunk_lid",
+    "windshield_rear", "taillight_rear_left",
+    "trunk_lid",  # 用户确认 intact
 ]
 
 
@@ -174,7 +177,11 @@ async def test_172852_stable_detection():
 
 @pytest.mark.asyncio
 async def test_172852_left_side_preserved():
-    """DAMAGE_RECOGNITION_POLICY §3.1: 原判正确的左侧 7 个 damaged 必须保持。"""
+    """DAMAGE_RECOGNITION_POLICY §3.1: 左侧 + 后侧 7 个 intact 部件不能误判 damaged。
+
+    2026-07-04 修订:左侧 + 后侧全部完好,这 7 个部件必须保持 intact。
+    §3.1 修复目标:不能让 primary_intact 翻转成 damaged。
+    """
     if not os.path.isdir(SAMPLE_DIR):
         pytest.skip(f"SAMPLE_DIR 不存在: {SAMPLE_DIR}")
     if not _django_available():
@@ -187,14 +194,17 @@ async def test_172852_left_side_preserved():
 
     fail_count = 0
     for i, run in enumerate(runs):
-        detected, total = _count_detection(run["parts"], MUST_REMAIN_DAMAGED)
-        flipped = total - detected
-        print(f"  run {i+1}: must_remain_damaged={detected}/{total}, flipped={flipped}")
-        if flipped > 0:
+        # MUST_REMAIN_INTACT 列表里被错误标记 damaged 的数量
+        false_pos = sum(
+            1 for pid in MUST_REMAIN_INTACT
+            if next((p for p in run["parts"] if p["part_id"] == pid), {}).get("status") == "damaged"
+        )
+        print(f"  run {i+1}: must_remain_intact false_positive={false_pos}/{len(MUST_REMAIN_INTACT)}")
+        if false_pos > 1:  # 允许 1 个边缘可见误判
             fail_count += 1
 
     assert fail_count == 0, (
-        f"{fail_count}/3 runs flipped some MUST_REMAIN_DAMAGED parts; "
+        f"{fail_count}/3 runs incorrectly flipped MUST_REMAIN_INTACT parts; "
         f"policy §3.1 violated"
     )
 

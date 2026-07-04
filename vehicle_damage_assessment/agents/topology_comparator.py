@@ -176,6 +176,19 @@ class TopologyConsistencyEnforcer:
 
             note = f"区域单元统一结论（{unit_name}）"
             for member in present:
+                if (
+                    member.status == unit_status
+                    and member.damage_level == unit_level
+                ):
+                    result[member.part_id] = member
+                    continue
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log the unification flip.
+                log_policy_conflict(
+                    part_id=member.part_id,
+                    final_status=unit_status.value,
+                    conflict_sources=sorted(m for m in members if m != member.part_id),
+                    rule_applied="topology_rule_unit_unification",
+                )
                 new_part = replace(
                     member,
                     status=unit_status,
@@ -226,6 +239,14 @@ class TopologyConsistencyEnforcer:
             if not intact_roof_neighbors or not has_direct_observation:
                 continue
 
+            # DAMAGE_RECOGNITION_POLICY §4.3 — log the missing-roof inference flip.
+            log_policy_conflict(
+                part_id=part_id,
+                final_status=Status.INTACT.value,
+                conflict_sources=intact_roof_neighbors,
+                rule_applied="topology_rule_missing_roof_inference",
+            )
+
             result[part_id] = replace(
                 state,
                 status=Status.INTACT,
@@ -267,6 +288,13 @@ class TopologyConsistencyEnforcer:
                 if n.status in (Status.DAMAGED, Status.MISSING)
             ]
             if damaged:
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log the confidence cap.
+                log_policy_conflict(
+                    part_id=part.part_id,
+                    final_status=Status.INTACT.value,
+                    conflict_sources=damaged,
+                    rule_applied="topology_rule_1",
+                )
                 new_part = replace(new_part, confidence="medium")
                 new_part = _append_note(
                     new_part, f"相邻部件存在损伤，降低置信度：{', '.join(damaged)}"
@@ -281,6 +309,13 @@ class TopologyConsistencyEnforcer:
                     and _LEVEL_PRIORITY.get(neighbor.damage_level, 0)
                     > _LEVEL_PRIORITY.get(new_part.damage_level, 0)
                 ):
+                    # DAMAGE_RECOGNITION_POLICY §4.3 — log the level bump.
+                    log_policy_conflict(
+                        part_id=part.part_id,
+                        final_status=neighbor.damage_level.value,
+                        conflict_sources=[neighbor.part_id],
+                        rule_applied="topology_rule_2",
+                    )
                     new_part = replace(
                         new_part, damage_level=neighbor.damage_level
                     )
@@ -298,6 +333,13 @@ class TopologyConsistencyEnforcer:
                 and n.damage_level == DamageLevel.SEVERE
             ]
             if severe:
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log the confidence cap.
+                log_policy_conflict(
+                    part_id=part.part_id,
+                    final_status=Status.INTACT.value,
+                    conflict_sources=severe,
+                    rule_applied="topology_rule_3",
+                )
                 new_part = replace(new_part, confidence="low")
                 new_part = _append_note(
                     new_part,
@@ -365,6 +407,13 @@ class TopologyConsistencyEnforcer:
             if windshield and windshield.status in (Status.DAMAGED, Status.MISSING) and windshield.damage_level == DamageLevel.SEVERE:
                 severe_front_structural.append("windshield_front")
             if severe_front_structural and not _has_source_status(new_part, "intact", {"top"}):
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log structural propagation.
+                log_policy_conflict(
+                    part_id=part.part_id,
+                    final_status=Status.DAMAGED.value,
+                    conflict_sources=severe_front_structural,
+                    rule_applied="topology_rule_10",
+                )
                 new_part = _set_damaged_severe(
                     new_part,
                     "deformation",
@@ -390,6 +439,13 @@ class TopologyConsistencyEnforcer:
                     allowed.add(f"pillar_c_{side}")
             severe_neighbors = _severe_neighbors(neighbors, allowed)
             if severe_neighbors and not _has_source_status(new_part, "intact", {"top"}):
+                # DAMAGE_RECOGNITION_POLICY §4.3 — log structural propagation.
+                log_policy_conflict(
+                    part_id=part.part_id,
+                    final_status=Status.DAMAGED.value,
+                    conflict_sources=severe_neighbors,
+                    rule_applied="topology_rule_11",
+                )
                 new_part = _set_damaged_severe(
                     new_part,
                     "deformation",

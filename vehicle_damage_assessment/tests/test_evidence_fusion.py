@@ -302,3 +302,24 @@ class TestPhotoListNormalization:
             assert len(p) > 1, f"photo id was split into chars: {p!r}"
         assert "172852-04.png" in overrides["windshield_rear"]["evidence_photo"]
         assert "172852-03.png" in overrides["windshield_rear"]["evidence_photo"]
+
+
+def test_part_view_priority_loaded_from_yaml():
+    """DAMAGE_RECOGNITION_POLICY §1.6: _PART_VIEW_PRIORITY 必须从 YAML 加载,无硬编码。"""
+    import inspect
+    from agents import evidence_fusion
+    src = inspect.getsource(evidence_fusion)
+    # 必须 import loader
+    assert "load_part_view_priority" in src, "evidence_fusion must import load_part_view_priority"
+    # 实际加载到的 _PART_VIEW_PRIORITY 应该包含至少 10 个 part_id
+    from agents.evidence_fusion import _PART_VIEW_PRIORITY
+    assert len(_PART_VIEW_PRIORITY) >= 10, (
+        f"expected ≥10 parts loaded from YAML, got {len(_PART_VIEW_PRIORITY)}: "
+        f"{list(_PART_VIEW_PRIORITY.keys())}"
+    )
+    # 关键部件必须存在
+    for required in ("windshield_front", "roof_middle", "headlight_front_right",
+                     "fender_front_right"):
+        assert required in _PART_VIEW_PRIORITY, (
+            f"{required} missing from loaded _PART_VIEW_PRIORITY"
+        )
