@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import OrderedDict
+from itertools import islice
 from typing import Any, Dict, List, Set, Tuple
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
@@ -174,6 +176,126 @@ def _build_covered_regions_text(view_id: str, topology: Any) -> str:
         part_names = [n.node_name for n in nodes]
         lines.append(f"- {region} 区域：{', '.join(part_names) if part_names else '无具体部件'}")
     return "\n".join(lines)
+
+
+def _partition_checklist(checklist: List[Dict[str, str]], max_size: int = 6) -> List[List[Dict[str, str]]]:
+    """Split a per-view checklist into region-based batches.
+
+    Items are grouped by their ``region`` field.  If a region contains more
+    than ``max_size`` items, it is split into ordered sub-batches of at most
+    ``max_size`` items.  This reduces the number of parts the LLM has to
+    evaluate in a single call, which improves completeness and output
+    stability.
+    """
+    groups: "OrderedDict[str, List[Dict[str, str]]]" = OrderedDict()
+    for item in checklist:
+        region = item.get("region", "")
+        groups.setdefault(region, []).append(item)
+
+    batches: List[List[Dict[str, str]]] = []
+    for region_items in groups.values():
+        iterator = iter(region_items)
+        while chunk := list(islice(iterator, max_size)):
+            batches.append(chunk)
+    return batches
+
+
+#: Priority ordering for merging duplicate part statuses across batches.
+_STATUS_PRIORITY: Dict[str, int] = {
+    "damaged": 3,
+    "uncertain": 2,
+    "missing": 1,
+    "intact": 0,
+}
+
+#: Priority ordering for merging duplicate part confidence values.
+_CONFIDENCE_PRIORITY: Dict[str, int] = {
+    "high": 2,
+    "medium": 1,
+    "low": 0,
+}
+
+
+def _better_part_status(existing: Dict[str, Any], new: Dict[str, Any]) -> bool:
+    """Return True if ``new`` should replace ``existing`` based on merge rules.
+
+    Preference order:
+    1. Higher status priority (damaged > uncertain > missing > intact).
+    2. If status is equal, higher confidence (high > medium > low).
+    """
+    existing_status = (existing.get("status") or "").lower()
+    new_status = (new.get("status") or "").lower()
+    if _STATUS_PRIORITY.get(new_status, -1) > _STATUS_PRIORITY.get(existing_status, -1):
+        return True
+    if new_status != existing_status:
+        return False
+    existing_conf = (existing.get("confidence") or "low").lower()
+    new_conf = (new.get("confidence") or "low").lower()
+    return _CONFIDENCE_PRIORITY.get(new_conf, -1) > _CONFIDENCE_PRIORITY.get(existing_conf, -1)
+
+
+def _dict_key(item: Dict[str, Any]) -> str:
+    """Build a deterministic string key for deduplication of dict items."""
+    parts: List[str] = []
+    for key in sorted(item.keys()):
+        value = item[key]
+        if value is None:
+            parts.append(f"{key}:")
+        elif isinstance(value, bool):
+            parts.append(f"{key}:{int(value)}")
+        elif isinstance(value, (list, tuple)):
+            parts.append(f"{key}:{','.join(str(v) for v in value)}")
+        else:
+            parts.append(f"{key}:{value}")
+    return "|".join(parts)
+
+
+def _merge_batch_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge the outputs of multiple per-sub-batch vision calls.
+
+    ``parts`` are merged by ``part_id`` using the priority rules in
+    :func:`_better_part_status`.  ``uncertain_items``,
+    ``cross_view_candidates``, and ``additional_findings`` are merged by
+    simple string-key deduplication over their scalar fields.
+    """
+    merged_parts_by_id: Dict[str, Dict[str, Any]] = {}
+    merged_uncertain: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    merged_cross_view: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    merged_additional: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    llm_returned_empty = False
+
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        if result.get("llm_returned_empty") or result.get("_llm_returned_empty"):
+            llm_returned_empty = True
+
+        for part_dict in result.get("parts", []):
+            if not isinstance(part_dict, dict):
+                continue
+            part_id = part_dict.get("part_id", "")
+            if not part_id:
+                continue
+            existing = merged_parts_by_id.get(part_id)
+            if existing is None or _better_part_status(existing, part_dict):
+                merged_parts_by_id[part_id] = part_dict
+
+        for key, target in (
+            ("uncertain_items", merged_uncertain),
+            ("cross_view_candidates", merged_cross_view),
+            ("additional_findings", merged_additional),
+        ):
+            for item in result.get(key, []):
+                if isinstance(item, dict):
+                    target.setdefault(_dict_key(item), item)
+
+    return {
+        "parts": list(merged_parts_by_id.values()),
+        "uncertain_items": list(merged_uncertain.values()),
+        "cross_view_candidates": list(merged_cross_view.values()),
+        "additional_findings": list(merged_additional.values()),
+        "_llm_returned_empty": llm_returned_empty,
+    }
 
 
 def _build_checklist(view_id: str, topology: Any) -> List[Dict[str, str]]:
@@ -566,6 +688,7 @@ async def _run_single_vision_attempt(
     vehicle_prior: Dict[str, Any],
     topology: Any,
     minimal: bool = False,
+    checklist_subset: List[Dict[str, str]] | None = None,
 ) -> Tuple[Dict[str, Any], List[str], bool]:
     """Run one vision subagent attempt.
 
@@ -576,7 +699,7 @@ async def _run_single_vision_attempt(
     """
     vehicle_name = vehicle_prior.get("vehicle", "该车")
     view_display_name = get_display_name(view_id)
-    checklist = _build_checklist(view_id, topology)
+    checklist = checklist_subset if checklist_subset is not None else _build_checklist(view_id, topology)
     checklist_text = _build_checklist_text(checklist, view_id)
 
     system_prompt = _build_system_prompt(
@@ -629,11 +752,12 @@ async def _run_vision_with_fallback(
     photos: List[Dict[str, Any]],
     vehicle_prior: Dict[str, Any],
     topology: Any,
+    checklist_subset: List[Dict[str, str]] | None = None,
 ) -> Tuple[Dict[str, Any], List[str], bool]:
     """Run vision subagent, falling back to a minimal prompt if LLM omits JSON."""
-    result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=False)
+    result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=False, checklist_subset=checklist_subset)
     if empty:
-        result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=True)
+        result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=True, checklist_subset=checklist_subset)
     return result, photo_ids, empty
 
 
@@ -668,6 +792,8 @@ async def vision_subagent(
             "parts": [],
             "part_actual_states": [],
             "uncertain_items": [],
+            "cross_view_candidates": [],
+            "additional_findings": [],
         }
 
     checklist = _build_checklist(view_id, topology)
@@ -679,9 +805,23 @@ async def vision_subagent(
             photo_type_lookup[photo_id] = photo.get("_planner_photo_type", "unknown")
 
     logger.info("[vision:%s] start checklist=%s photo_ids=%s", view_id, [c["part_id"] for c in checklist], [p.get("id", "") for p in photos if p.get("id")])
-    result, photo_ids, llm_returned_empty = await _run_vision_with_fallback(
-        view_id, photos, vehicle_prior, topology
-    )
+
+    if checklist:
+        batches = _partition_checklist(checklist)
+        batch_results = []
+        for sub_batch in batches:
+            result, photo_ids, llm_returned_empty = await _run_vision_with_fallback(
+                view_id, photos, vehicle_prior, topology, checklist_subset=sub_batch
+            )
+            batch_results.append(result)
+        merged = _merge_batch_results(batch_results)
+        result: Dict[str, Any] = merged
+        photo_ids = [p.get("id", "") for p in photos if p.get("id")]
+        llm_returned_empty = merged.get("_llm_returned_empty", False)
+    else:
+        result, photo_ids, llm_returned_empty = await _run_vision_with_fallback(
+            view_id, photos, vehicle_prior, topology
+        )
 
     parts: List[Dict[str, Any]] = []
     part_actual_states: List[PartActualState] = []
@@ -734,14 +874,23 @@ async def vision_subagent(
     missing_checklist_ids = checklist_ids - seen_ids
     concrete_states = [s for s in part_actual_states if s.status != Status.UNCERTAIN]
     logger.info("[vision:%s] seen=%s missing=%s concrete=%d llm_empty=%s", view_id, sorted(seen_ids), sorted(missing_checklist_ids), len(concrete_states), llm_returned_empty)
-    for item in checklist:
-        if item["part_id"] not in missing_checklist_ids:
-            continue
-        state = _make_uncertain_part(item, photo_ids, concrete_states)
-        part_actual_states.append(state)
-        parts.append(state.to_dict())
-        seen_ids.add(item["part_id"])
-        logger.info("[vision:%s] backfilled %s as %s", view_id, item["part_id"], state.status.value)
+    if missing_checklist_ids:
+        for item in checklist:
+            if item["part_id"] not in missing_checklist_ids:
+                continue
+            state = _make_uncertain_part(item, photo_ids, concrete_states)
+            part_actual_states.append(state)
+            parts.append(state.to_dict())
+            seen_ids.add(item["part_id"])
+            logger.info("[vision:%s] backfilled %s as %s", view_id, item["part_id"], state.status.value)
+
+    if not result.get("cross_view_candidates"):
+        cross_view_candidates: List[Dict[str, Any]] = []
+    else:
+        cross_view_candidates = [
+            item for item in result.get("cross_view_candidates", [])
+            if isinstance(item, dict)
+        ]
 
     uncertain_items = [
         item for item in result.get("uncertain_items", [])
@@ -761,13 +910,14 @@ async def vision_subagent(
             f"Vision subagent for {view_id} returned no parts; treating as anomaly"
         )
 
-    logger.info("[vision:%s] done parts=%d uncertain_items=%d additional=%d", view_id, len(parts), len(uncertain_items), len(additional_findings))
+    logger.info("[vision:%s] done parts=%d uncertain_items=%d cross_view=%d additional=%d", view_id, len(parts), len(uncertain_items), len(cross_view_candidates), len(additional_findings))
     return {
         "view_id": view_id,
         "regions": get_regions_for_view(view_id),
         "parts": parts,
         "part_actual_states": part_actual_states,
         "uncertain_items": uncertain_items,
+        "cross_view_candidates": cross_view_candidates,
         "additional_findings": additional_findings,
         "_llm_returned_empty": llm_returned_empty,
     }
