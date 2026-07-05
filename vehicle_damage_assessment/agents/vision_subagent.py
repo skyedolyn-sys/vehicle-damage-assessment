@@ -11,10 +11,8 @@ subagent focused on visual recognition.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 from typing import Any, Dict, List, Set, Tuple
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
@@ -140,10 +138,11 @@ def _normalize_part_id(raw_id: str) -> str:
 
 
 
-def _build_system_prompt(view_id: str, view_display_name: str, checklist_text: str, vehicle_name: str) -> str:
+def _build_system_prompt(view_id: str, view_display_name: str, checklist_text: str, vehicle_name: str, minimal: bool = False) -> str:
     """Render the vision subagent system prompt from the rules package template."""
+    template_name = "vision_system_prompt_minimal" if minimal else "vision_system_prompt"
     return render_prompt_template(
-        "vision_system_prompt",
+        template_name,
         view_id=view_id,
         view_display_name=view_display_name,
         checklist_text=checklist_text,
@@ -561,6 +560,83 @@ def _llm_dict_to_part_actual_state(
     )
 
 
+async def _run_single_vision_attempt(
+    view_id: str,
+    photos: List[Dict[str, Any]],
+    vehicle_prior: Dict[str, Any],
+    topology: Any,
+    minimal: bool = False,
+) -> Tuple[Dict[str, Any], List[str], bool]:
+    """Run one vision subagent attempt.
+
+    Returns ``(parsed_result, photo_ids, llm_returned_empty)``.
+    ``llm_returned_empty`` is True when the LLM output contained no usable
+    ``parts`` array, which is the primary stability failure mode we want to
+    retry.
+    """
+    vehicle_name = vehicle_prior.get("vehicle", "该车")
+    view_display_name = get_display_name(view_id)
+    checklist = _build_checklist(view_id, topology)
+    checklist_text = _build_checklist_text(checklist, view_id)
+
+    system_prompt = _build_system_prompt(
+        view_id=view_id,
+        view_display_name=view_display_name,
+        checklist_text=checklist_text,
+        vehicle_name=vehicle_name,
+        minimal=minimal,
+    )
+
+    content: List[Dict[str, Any]] = [
+        {"type": "text", "text": system_prompt},
+        {"type": "text", "text": f"以下是 {len(photos)} 张{view_display_name}照片，请联合分析："},
+    ]
+
+    photo_type_lookup: Dict[str, str] = {}
+    for photo in photos:
+        photo_id = photo.get("id", "")
+        if photo_id:
+            photo_type_lookup[photo_id] = photo.get("_planner_photo_type", "unknown")
+
+    for photo in photos:
+        content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
+        content.append(build_image_content(photo.get("path") or photo.get("url", ""), max_width=IMAGE_MAX_WIDTH))
+
+    messages = [{"role": "user", "content": content}]
+    photo_ids = [p.get("id", "") for p in photos if p.get("id")]
+    label = "minimal" if minimal else "primary"
+    logger.info("[vision:%s] %s start checklist=%s photo_ids=%s", view_id, label, [c["part_id"] for c in checklist], photo_ids)
+
+    max_tokens = 3000 if minimal else 5000
+    temperature = 0.1 if minimal else 0.0
+    raw = await call_minimax(
+        messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    extracted = extract_json(raw)
+    if not isinstance(extracted, dict):
+        logger.warning("[vision:%s] %s call returned non-object JSON (%s)", view_id, label, type(extracted).__name__)
+        return {}, photo_ids, True
+
+    logger.info("[vision:%s] %s result type=%s has_parts=%s has_uncertain=%s", view_id, label, type(extracted).__name__, bool(extracted.get("parts")), bool(extracted.get("uncertain_items")))
+    return extracted, photo_ids, not bool(extracted.get("parts"))
+
+
+async def _run_vision_with_fallback(
+    view_id: str,
+    photos: List[Dict[str, Any]],
+    vehicle_prior: Dict[str, Any],
+    topology: Any,
+) -> Tuple[Dict[str, Any], List[str], bool]:
+    """Run vision subagent, falling back to a minimal prompt if LLM omits JSON."""
+    result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=False)
+    if empty:
+        result, photo_ids, empty = await _run_single_vision_attempt(view_id, photos, vehicle_prior, topology, minimal=True)
+    return result, photo_ids, empty
+
+
 async def vision_subagent(
     view_id: str,
     photos: List[Dict[str, Any]],
@@ -594,22 +670,7 @@ async def vision_subagent(
             "uncertain_items": [],
         }
 
-    vehicle_name = vehicle_prior.get("vehicle", "该车")
-    view_display_name = get_display_name(view_id)
     checklist = _build_checklist(view_id, topology)
-    checklist_text = _build_checklist_text(checklist, view_id)
-
-    system_prompt = _build_system_prompt(
-        view_id=view_id,
-        view_display_name=view_display_name,
-        checklist_text=checklist_text,
-        vehicle_name=vehicle_name,
-    )
-
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": system_prompt},
-        {"type": "text", "text": f"以下是 {len(photos)} 张{view_display_name}照片，请联合分析："},
-    ]
 
     photo_type_lookup: Dict[str, str] = {}
     for photo in photos:
@@ -617,19 +678,10 @@ async def vision_subagent(
         if photo_id:
             photo_type_lookup[photo_id] = photo.get("_planner_photo_type", "unknown")
 
-    for photo in photos:
-        content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
-        content.append(build_image_content(photo.get("path") or photo.get("url", ""), max_width=IMAGE_MAX_WIDTH))
-
-    messages = [{"role": "user", "content": content}]
-    photo_ids = [p.get("id", "") for p in photos if p.get("id")]
-    logger.info("[vision:%s] start checklist=%s photo_ids=%s", view_id, [c["part_id"] for c in checklist], photo_ids)
-    raw = await call_minimax(messages, temperature=0.0, max_tokens=3000)
-    result = extract_json(raw) or {}
-    logger.info("[vision:%s] result type=%s has_parts=%s has_uncertain=%s", view_id, type(result).__name__, bool(result.get("parts")), bool(result.get("uncertain_items")))
-
-    if not isinstance(result, dict):
-        result = {}
+    logger.info("[vision:%s] start checklist=%s photo_ids=%s", view_id, [c["part_id"] for c in checklist], [p.get("id", "") for p in photos if p.get("id")])
+    result, photo_ids, llm_returned_empty = await _run_vision_with_fallback(
+        view_id, photos, vehicle_prior, topology
+    )
 
     parts: List[Dict[str, Any]] = []
     part_actual_states: List[PartActualState] = []
@@ -681,7 +733,7 @@ async def vision_subagent(
     checklist_ids = {item["part_id"] for item in checklist}
     missing_checklist_ids = checklist_ids - seen_ids
     concrete_states = [s for s in part_actual_states if s.status != Status.UNCERTAIN]
-    logger.info("[vision:%s] seen=%s missing=%s concrete=%d", view_id, sorted(seen_ids), sorted(missing_checklist_ids), len(concrete_states))
+    logger.info("[vision:%s] seen=%s missing=%s concrete=%d llm_empty=%s", view_id, sorted(seen_ids), sorted(missing_checklist_ids), len(concrete_states), llm_returned_empty)
     for item in checklist:
         if item["part_id"] not in missing_checklist_ids:
             continue
@@ -717,4 +769,5 @@ async def vision_subagent(
         "part_actual_states": part_actual_states,
         "uncertain_items": uncertain_items,
         "additional_findings": additional_findings,
+        "_llm_returned_empty": llm_returned_empty,
     }

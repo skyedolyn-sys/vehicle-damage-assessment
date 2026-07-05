@@ -35,22 +35,25 @@ async def call_minimax(
     temperature: float = 0.1,
     max_tokens: int = 4000,
     model: str | None = None,
+    response_format: Dict[str, Any] | None = None,
 ) -> str:
     """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）"""
     call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     request_model = model or MINIMAX_MODEL
-    logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s", call_id, request_model, temperature, max_tokens)
+    logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s json_mode=%s", call_id, request_model, temperature, max_tokens, bool(response_format))
 
     headers = {
         "Authorization": f"Bearer {MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload = {
+    payload: Dict[str, Any] = {
         "model": request_model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if response_format:
+        payload["response_format"] = response_format
 
     last_exception = None
     for attempt in range(1, 4):

@@ -589,7 +589,12 @@ async def planner_agent(
             messages = [{"role": "user", "content": content}]
             try:
                 raw = await asyncio.wait_for(
-                    call_minimax(messages, temperature=0.0, max_tokens=8000),
+                    call_minimax(
+                        messages,
+                        temperature=0.0,
+                        max_tokens=8000,
+                        response_format={"type": "json_object"},
+                    ),
                     timeout=_PLANNER_BATCH_TIMEOUT_SEC,
                 )
                 logger.info(
