@@ -1,3 +1,5 @@
+from typing import Dict
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -508,10 +510,11 @@ class TestAugmentCoverageNoPhotoReuse:
         filled = sum(1 for v in target_views if out["view_groups"].get(v))
         assert filled == 3, f"expected 3 filled views, got {filled}"
 
-    def test_keeps_priority_views_at_six(self):
-        """The 6-view priority list must remain so the orchestrator can
-        dispatch 6 vision subagents — never collapse to 1 (the
-        pre-fix bug)."""
+    def test_keeps_priority_views_at_seven(self):
+        """The 7-view priority list (6 sides + top) must remain so the
+        orchestrator can dispatch vision subagents — never collapse to 1 (the
+        pre-fix bug).
+        """
         from agents.planner_agent import _augment_exterior_coverage
 
         photos = [
@@ -528,8 +531,8 @@ class TestAugmentCoverageNoPhotoReuse:
 
         out = _augment_exterior_coverage(plan, photos, photo_types)
         priority = out["workflow_plan"]["priority_views"]
-        assert len(priority) == 6, (
-            f"expected 6 priority views, got {len(priority)}: {priority}"
+        assert len(priority) == 7, (
+            f"expected 7 priority views, got {len(priority)}: {priority}"
         )
 
 
@@ -565,7 +568,7 @@ async def test_2026_06_22_sample_simulation():
     view_groups = result.get("view_groups", {})
     target_views = (
         "front_left_45", "front_right_45", "rear_left_45",
-        "rear_right_45", "left_90", "right_90",
+        "rear_right_45", "left_90", "right_90", "top",
     )
     seen = {}
     for v in target_views:
@@ -576,7 +579,197 @@ async def test_2026_06_22_sample_simulation():
             )
             seen[pid] = v
     priority = result.get("workflow_plan", {}).get("priority_views", [])
-    assert len(priority) == 6
+    assert len(priority) == 7
     coverage_gaps = [g["missing_view"] for g in result.get("coverage_gaps", [])]
     assert "front" in coverage_gaps
     assert "rear" in coverage_gaps
+
+
+class TestStabilizePlanPreservesCloseUpExteriorViews:
+    """close_up_damage / close_up_detail photos with a usable exterior view_id
+    must stay in that exterior group, not be rerouted to scene_intake.
+    """
+
+    def test_close_up_damage_keeps_exterior_view_id(self):
+        photos = [
+            {"id": "172852-15.png", "path": "/tmp/15.png"},
+        ]
+        photo_views = [
+            {"photo_id": "172852-15.png", "view_id": "front_left_45", "confidence": "medium", "reason": "llm"},
+        ]
+        photo_types = {"172852-15.png": "close_up_damage"}
+        plan = _stabilize_plan(photo_views, photos, photo_types)
+
+        assert len(plan["view_groups"]["front_left_45"]) == 1
+        assert plan["view_groups"]["front_left_45"][0]["id"] == "172852-15.png"
+        assert plan["view_groups"]["front_left_45"][0]["_planner_photo_type"] == "close_up_damage"
+
+    def test_close_up_detail_keeps_exterior_view_id(self):
+        photos = [
+            {"id": "172852-20.png", "path": "/tmp/20.png"},
+        ]
+        photo_views = [
+            {"photo_id": "172852-20.png", "view_id": "right_90", "confidence": "high", "reason": "llm"},
+        ]
+        photo_types = {"172852-20.png": "close_up_detail"}
+        plan = _stabilize_plan(photo_views, photos, photo_types)
+
+        assert len(plan["view_groups"]["right_90"]) == 1
+        assert plan["view_groups"]["right_90"][0]["id"] == "172852-20.png"
+
+    def test_close_up_without_exterior_view_goes_to_scene_intake(self):
+        photos = [
+            {"id": "172852-21.png", "path": "/tmp/21.png"},
+        ]
+        photo_views = [
+            {"photo_id": "172852-21.png", "view_id": "unknown", "confidence": "low", "reason": "llm"},
+        ]
+        photo_types = {"172852-21.png": "close_up_damage"}
+        plan = _stabilize_plan(photo_views, photos, photo_types)
+
+        assert len(plan["view_groups"]["scene_intake"]) == 1
+        assert plan["view_groups"]["scene_intake"][0]["id"] == "172852-21.png"
+
+
+class TestDeterministicStabilizeRetainsMultiplePhotos:
+    """_deterministic_stabilize should keep supplementary evidence for key views."""
+
+    def test_retains_up_to_three_for_corner_and_top_views(self):
+        from agents.planner_agent import _deterministic_stabilize
+
+        photos = [{"id": f"fl{i:02d}.png", "path": f"/tmp/fl{i:02d}.png"} for i in range(1, 5)]
+        plan = {
+            "photo_views": [],
+            "view_groups": {
+                "front_left_45": [
+                    {
+                        "id": f"fl{i:02d}.png",
+                        "path": f"/tmp/fl{i:02d}.png",
+                        "_planner_view": "front_left_45",
+                        "_planner_confidence": "high" if i == 1 else "medium",
+                        "_planner_reason": "",
+                        "_planner_photo_type": "exterior",
+                    }
+                    for i in range(1, 5)
+                ],
+            },
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": ["front_left_45"], "missing_critical_views": []},
+        }
+        out = _deterministic_stabilize(plan, photos)
+        assert len(out["view_groups"]["front_left_45"]) == 3
+        retained_ids = {p["id"] for p in out["view_groups"]["front_left_45"]}
+        # Highest-confidence first three by filename order should be retained.
+        assert "fl01.png" in retained_ids
+        for p in out["view_groups"]["front_left_45"]:
+            assert p["_planner_view"] == "front_left_45"
+            assert p["_planner_photo_type"] == "exterior"
+
+    def test_retains_up_to_two_for_side_views(self):
+        from agents.planner_agent import _deterministic_stabilize
+
+        photos = [{"id": f"left{i:02d}.png", "path": f"/tmp/left{i:02d}.png"} for i in range(1, 4)]
+        plan = {
+            "photo_views": [],
+            "view_groups": {
+                "left_90": [
+                    {
+                        "id": f"left{i:02d}.png",
+                        "path": f"/tmp/left{i:02d}.png",
+                        "_planner_view": "left_90",
+                        "_planner_confidence": "high",
+                        "_planner_reason": "",
+                        "_planner_photo_type": "exterior",
+                    }
+                    for i in range(1, 4)
+                ],
+            },
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": ["left_90"], "missing_critical_views": []},
+        }
+        out = _deterministic_stabilize(plan, photos)
+        assert len(out["view_groups"]["left_90"]) == 2
+
+    def test_retains_one_for_other_exterior_views(self):
+        from agents.planner_agent import _deterministic_stabilize
+
+        photos = [{"id": f"front{i:02d}.png", "path": f"/tmp/front{i:02d}.png"} for i in range(1, 4)]
+        plan = {
+            "photo_views": [],
+            "view_groups": {
+                "front": [
+                    {
+                        "id": f"front{i:02d}.png",
+                        "path": f"/tmp/front{i:02d}.png",
+                        "_planner_view": "front",
+                        "_planner_confidence": "high",
+                        "_planner_reason": "",
+                        "_planner_photo_type": "exterior",
+                    }
+                    for i in range(1, 4)
+                ],
+            },
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": ["front"], "missing_critical_views": []},
+        }
+        out = _deterministic_stabilize(plan, photos)
+        assert len(out["view_groups"]["front"]) == 1
+
+
+class TestAugmentCoverage172852:
+    """172852-style numbered datasets must fill front_right_45, right_90 and top
+    deterministically across repeated runs.
+    """
+
+    def test_augment_fills_front_right_right_90_and_top_across_three_runs(self):
+        from agents.planner_agent import _augment_exterior_coverage
+
+        # 32 numbered photos, no useful LLM labels, mix of exterior/close-up aspect ratios.
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+            for i in range(1, 33)
+        ]
+        plan = {
+            "photo_views": [],
+            "view_groups": {"unknown": photos, "auxiliary": [], "interior": []},
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": [], "missing_critical_views": []},
+        }
+        # Simulate deterministic classification: portrait/landscape -> close_up_damage,
+        # square-ish -> exterior. This is the realistic mix that caused the original bug.
+        photo_types: Dict[str, str] = {}
+        for i, p in enumerate(photos, start=1):
+            if i % 5 in (1, 4):  # portrait / landscape-ish
+                photo_types[p["id"]] = "close_up_damage"
+            else:
+                photo_types[p["id"]] = "exterior"
+
+        for _ in range(3):
+            out = _augment_exterior_coverage(plan, photos, photo_types)
+            groups = out["view_groups"]
+            assert groups["front_right_45"], "front_right_45 should be filled"
+            assert groups["right_90"], "right_90 should be filled"
+            assert groups["top"], "top should be filled"
+
+    def test_close_up_photos_eligible_for_augment_rotation(self):
+        from agents.planner_agent import _augment_exterior_coverage
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/{i}.png"}
+            for i in range(1, 8)
+        ]
+        plan = {
+            "photo_views": [],
+            "view_groups": {"unknown": photos, "auxiliary": []},
+            "coverage_gaps": [],
+            "workflow_plan": {"priority_views": [], "missing_critical_views": []},
+        }
+        # All close_up_damage: previously they were excluded from rotation.
+        photo_types = {p["id"]: "close_up_damage" for p in photos}
+
+        out = _augment_exterior_coverage(plan, photos, photo_types)
+        filled = sum(
+            1 for v in ("front_right_45", "right_90", "top")
+            if out["view_groups"].get(v)
+        )
+        assert filled >= 2, f"expected close-up photos to fill missing views, got filled={filled}"

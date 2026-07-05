@@ -356,9 +356,11 @@ def _stabilize_plan(
     """
     photo_by_id = {p.get("id", ""): p for p in photos}
 
-    # Enforce photo type on every entry and mark non-exterior views accordingly.
-    # DAMAGE_RECOGNITION_POLICY §1.2: 不再把无法识别的照片静默丢进 unknown 桶;
-    # 改为 scene_intake,由 orchestrator 调度 intake subagent 处理。
+    # Preserve the planner's view_id unless the photo type strictly says it is
+    # interior or auxiliary. Close-up / detail photos that the planner already
+    # placed into an exterior view should stay there so we don't discard
+    # supplementary exterior evidence. Close-up photos without an exterior
+    # assignment are routed to scene_intake for intake review.
     stabilized: List[Dict[str, Any]] = []
     for entry in photo_views:
         photo_id = entry.get("photo_id", "")
@@ -367,8 +369,14 @@ def _stabilize_plan(
         planner_confidence = entry.get("confidence", "low")
         if photo_type in ("interior", "auxiliary"):
             view_id = photo_type
-        elif photo_type in ("unknown", "scene_intake") and view_id not in NON_EXTERIOR_VIEWS:
-            view_id = "scene_intake"
+        elif photo_type in ("close_up_damage", "close_up_detail"):
+            # Preserve the planner's exterior assignment; fall back to scene_intake
+            # only when the planner gave a non-exterior view.
+            if view_id not in EXTERIOR_VIEWS:
+                view_id = "scene_intake"
+        # For unknown / scene_intake / exterior / missing photo_type: keep the
+        # planner's view_id as-is. This prevents numbered exterior photos that
+        # were classified as close-up from being kicked out of their view.
         stabilized.append(
             {
                 "photo_id": photo_id,
@@ -393,7 +401,7 @@ def _stabilize_plan(
         enriched["_planner_view"] = view_id
         enriched["_planner_confidence"] = entry.get("confidence", "low")
         enriched["_planner_reason"] = entry.get("reason", "")
-        enriched["_planner_photo_type"] = entry.get("photo_type", "unknown")
+        enriched["_planner_photo_type"] = photo_types.get(photo_id, "unknown")
         groups.setdefault(view_id, []).append(enriched)
 
     for view_id, photo_list in groups.items():
@@ -879,8 +887,9 @@ def _augment_exterior_coverage(
     """Deterministically fill missing exterior views using filename rotation.
 
     No LLM call. Runs after _stabilize_plan so the merged batches all
-    contribute to the rotation. Targets the canonical 6-view set:
-    front_left_45, front_right_45, rear_left_45, rear_right_45, left_90, right_90.
+    contribute to the rotation. Targets the canonical 7-view set:
+    front_left_45, front_right_45, rear_left_45, rear_right_45, left_90,
+    right_90, top.
 
     This replaces the old _fallback_replan LLM call when the merged plan
     covers too few views (common with 4-batch topology since each batch
@@ -891,7 +900,7 @@ def _augment_exterior_coverage(
     target_views = [
         "front_left_45", "front_right_45",
         "rear_left_45", "rear_right_45",
-        "left_90", "right_90",
+        "left_90", "right_90", "top",
     ]
     covered = {v for v, g in view_groups.items() if g and is_exterior_view(v)}
     missing = [v for v in target_views if v not in covered]
@@ -913,9 +922,12 @@ def _augment_exterior_coverage(
         pid = photo.get("id", "")
         if not pid:
             continue
-        # Skip non-exterior photos (interior / auxiliary / scene_intake)
+        # Skip non-exterior photos (interior / auxiliary / scene_intake).
+        # Close-up damage/detail shots and unknown-type photos are eligible for
+        # rotation because they often contain the only evidence for missing
+        # critical views such as front_right_45, right_90, or top.
         photo_type = photo_types.get(pid, "")
-        if photo_type and photo_type not in ("exterior", "unknown"):
+        if photo_type and photo_type not in ("exterior", "unknown", "close_up_damage", "close_up_detail"):
             continue
         if pid not in in_target_ids:
             rotation_pool.append(photo)
@@ -1217,20 +1229,30 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
     The LLM planner is sensitive to API jitter; this post-processor enforces
     deterministic rules on top of the raw planner output:
 
-    - Keeps the highest-confidence label for each photo.
-    - Merges front/rear corner views that differ only by side (e.g. two
-      front_left_45 photos) into one representative photo per canonical view.
-    - When multiple photos map to the same canonical side view (left/right)
-      or corner view, selects the photo whose filename index is most typical
-      for that view, preferring high confidence.
-    - Ensures the returned view_groups contain at most one photo per canonical
-      exterior view for stable downstream subagent dispatch.
+    - Keeps the highest-confidence labels for each photo.
+    - Retains up to N photos per canonical exterior view so supplementary
+      evidence (close-ups, alternate angles) is preserved while still giving
+      downstream subagents a bounded, predictable set.
+    - When no pure side view exists, derives ``left_90`` / ``right_90`` from
+      the best available corner photos.
 
-    This reduces 12-photo "车顶闸" style datasets to a predictable 6-view
-    coverage: front_left_45, front_right_45, rear_left_45, rear_right_45, left_90, right_90.
+    Per-view retention limits:
+    - ``front_left_45``, ``front_right_45``, ``top``: up to 3 photos
+    - ``left_90``, ``right_90``: up to 2 photos
+    - all other exterior views: 1 photo
     """
     photo_by_id = {p.get("id", ""): p for p in photos}
     view_groups = plan.get("view_groups", {})
+
+    # Per-view retention limits. Important views get more slots so we keep
+    # supplementary evidence such as close-up damage shots.
+    _VIEW_RETENTION_LIMITS: Dict[str, int] = {
+        "front_left_45": 3,
+        "front_right_45": 3,
+        "top": 3,
+        "left_90": 2,
+        "right_90": 2,
+    }
 
     # Collect all exterior photo entries with their raw planner metadata.
     entries_by_view: Dict[str, List[Dict[str, Any]]] = {view: [] for view in EXTERIOR_VIEWS}
@@ -1252,14 +1274,16 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
 
     canonical_groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
 
-    # Rule 1: for corner views and side views, keep only the best representative.
-    # This collapses duplicate-angle photos into a single canonical dispatch.
+    # Rule 1: keep the best N photos per canonical exterior view.
+    # Each retained photo already carries _planner_* enrichment from
+    # _stabilize_plan / _augment_exterior_coverage; preserve it as-is.
     for view_id in EXTERIOR_VIEWS:
         candidates = entries_by_view.get(view_id, [])
         if not candidates:
             continue
         candidates_sorted = sorted(candidates, key=_rank_key, reverse=True)
-        canonical_groups[view_id] = [candidates_sorted[0]]
+        limit = _VIEW_RETENTION_LIMITS.get(view_id, 1)
+        canonical_groups[view_id] = candidates_sorted[:limit]
 
     # Rule 2: if a dataset has many corner photos but no pure side (left/right),
     # derive side views from the best corner photos that show that side.
@@ -1291,8 +1315,7 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
     for view_id in NON_EXTERIOR_VIEWS:
         canonical_groups[view_id] = list(view_groups.get(view_id, []))
 
-    # Rebuild photo_views to match canonical groups, keeping at most one entry
-    # per photo_id (prefer the canonical view over derived side views).
+    # Rebuild photo_views to match canonical groups.
     new_photo_views: List[Dict[str, Any]] = []
     seen_photo_ids: set = set()
     for view_id, photo_list in canonical_groups.items():
