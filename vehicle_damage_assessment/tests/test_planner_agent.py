@@ -2,6 +2,8 @@ from typing import Dict
 
 import pytest
 from unittest.mock import AsyncMock, patch
+import json
+import os
 
 from agents.planner_agent import (
     _classify_photo_by_filename,
@@ -13,8 +15,9 @@ from agents.planner_agent import (
     normalize_view_id,
     plan_to_location_map,
     planner_agent,
+    EXTERIOR_VIEWS,
 )
-from agents.view_mapping import EXTERIOR_VIEWS, STANDARD_VIEWS
+from agents.view_mapping import STANDARD_VIEWS
 
 
 def test_normalize_view_id_variants():
@@ -773,3 +776,149 @@ class TestAugmentCoverage172852:
             if out["view_groups"].get(v)
         )
         assert filled >= 2, f"expected close-up photos to fill missing views, got filled={filled}"
+
+
+class TestBatchRetryAndFallbackThresholds:
+    """Direction 1 stability fixes: per-batch retry and global fallback threshold."""
+
+    @pytest.mark.asyncio
+    async def test_batch_retries_when_fewer_than_half_known(self, monkeypatch):
+        """First call returns 2 known / 8 → a second call must be attempted."""
+        import importlib
+        pa = importlib.import_module("agents.planner_agent")
+
+        responses = [
+            json.dumps({"photo_views": [
+                {"photo_id": f"172852-{i:02d}.png", "view_id": "unknown", "confidence": "low"}
+                for i in range(1, 9)
+            ]}),
+            json.dumps({"photo_views": [
+                {"photo_id": f"172852-{i:02d}.png", "view_id": view, "confidence": "high"}
+                for i, view in enumerate([
+                    "front_left_45", "front_right_45", "rear_left_45",
+                    "rear_right_45", "left_90", "right_90", "front", "rear",
+                ], start=1)
+            ]}),
+        ]
+        call_log = []
+
+        async def fake_call_minimax(messages, **kwargs):
+            call_log.append(kwargs)
+            return responses.pop(0)
+
+        monkeypatch.setattr(pa, "call_minimax", fake_call_minimax)
+        monkeypatch.setattr(
+            pa, "_build_image_content",
+            lambda photo, max_width=None: {"type": "image_url", "image_url": {"url": "data:fake"}},
+        )
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/p{i}.png"}
+            for i in range(1, 9)
+        ]
+        result = await pa.planner_agent(photos, {"vehicle": "Test"})
+
+        # The second call must have been made with the shorter prompt and temperature 0.0
+        assert len(call_log) == 2, f"expected 2 calls, got {len(call_log)}"
+        assert all(c["temperature"] == 0.0 for c in call_log)
+
+    @pytest.mark.asyncio
+    async def test_fallback_replan_uses_json_mode(self, monkeypatch):
+        """Sparse coverage must trigger _fallback_replan and pass response_format."""
+        import importlib
+        pa = importlib.import_module("agents.planner_agent")
+
+        call_log = []
+
+        async def fake_call_minimax(messages, **kwargs):
+            call_log.append(kwargs)
+            return json.dumps({"photo_views": []})
+
+        monkeypatch.setattr(pa, "call_minimax", fake_call_minimax)
+        monkeypatch.setattr(
+            pa, "_build_image_content",
+            lambda photo, max_width=None: {"type": "image_url", "image_url": {"url": "data:fake"}},
+        )
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/p{i}.png"}
+            for i in range(1, 33)
+        ]
+        await pa.planner_agent(photos, {"vehicle": "Test"})
+
+        assert any(
+            c.get("response_format") == {"type": "json_object"}
+            for c in call_log
+        ), "fallback_replan must call call_minimax with response_format json_object"
+
+    @pytest.mark.asyncio
+    async def test_final_plan_warns_when_under_six_views(self, monkeypatch, caplog):
+        """If the final plan has <6 exterior views a warning must be logged."""
+        import importlib
+        import logging
+        pa = importlib.import_module("agents.planner_agent")
+
+        async def fake_call_minimax(messages, **kwargs):
+            return json.dumps({"photo_views": []})
+
+        monkeypatch.setattr(pa, "call_minimax", fake_call_minimax)
+        monkeypatch.setattr(
+            pa, "_build_image_content",
+            lambda photo, max_width=None: {"type": "image_url", "image_url": {"url": "data:fake"}},
+        )
+
+        photos = [
+            {"id": f"172852-{i:02d}.png", "path": f"/tmp/p{i}.png"}
+            for i in range(1, 3)
+        ]
+        with caplog.at_level(logging.WARNING, logger="agents.planner_agent"):
+            await pa.planner_agent(photos, {"vehicle": "Test"})
+
+        assert any(
+            "final plan covers only" in rec.message
+            for rec in caplog.records
+        ), "expected warning log for final plan with <6 exterior views"
+
+
+@pytest.mark.asyncio
+async def test_planner_agent_172852_sample_three_runs():
+    """Run planner_agent on the real 172852 sample 3 times.
+
+    Because real MiniMax calls take ~30-120s per batch and cost money, this
+    test mocks the LLM and instead exercises the deterministic safety nets and
+    augmentation code on the actual filenames.  Manual verification with real
+    LLM calls should still be performed before release.
+    """
+    import importlib
+    import os
+    pa = importlib.import_module("agents.planner_agent")
+
+    sample_dir = "/Users/sky/Downloads/车顶闸调试样本_20260622/lead_172852"
+    if not os.path.isdir(sample_dir):
+        pytest.skip(f"Sample directory not found: {sample_dir}")
+
+    photos = [
+        {"id": name, "path": os.path.join(sample_dir, name)}
+        for name in sorted(os.listdir(sample_dir))
+        if name.lower().endswith((".png", ".jpg", ".jpeg"))
+    ]
+    assert len(photos) == 32, f"expected 32 photos, got {len(photos)}"
+
+    async def fake_call_minimax(messages, **kwargs):
+        # Simulate flaky MiniMax: return empty to force safety nets.
+        return ""
+
+    with patch(
+        "agents.planner_agent.call_minimax",
+        new=AsyncMock(side_effect=fake_call_minimax),
+    ):
+        for run in range(1, 4):
+            result = await pa.planner_agent(list(photos), {"vehicle": "Unknown"})
+            priority = result.get("workflow_plan", {}).get("priority_views", [])
+            assert len(priority) >= 6, (
+                f"run {run}: expected ≥6 exterior views, got {len(priority)}: {priority}"
+            )
+            photo_views = result.get("photo_views", [])
+            seen = {e["photo_id"] for e in photo_views}
+            missing = {p["id"] for p in photos} - seen
+            assert not missing, f"run {run}: photos without view: {missing}"

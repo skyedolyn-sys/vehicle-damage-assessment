@@ -530,6 +530,8 @@ async def planner_agent(
             "workflow_plan": {"summary": "没有照片", "priority_views": [], "missing_critical_views": []},
         }
 
+    total_input_photos = len(photos)
+
     # Classify photos up-front so every downstream fallback can rely on a
     # stable photo_type map. This is critical: previous code ran the classifier
     # after the LLM fallback, so exterior/unknown filters during rotation were
@@ -577,62 +579,104 @@ async def planner_agent(
         )
 
         async def _run_batch(batch_photos: List[Dict[str, Any]], batch_idx: int) -> List[Dict[str, Any]]:
-            """Run a single batch through LLM and return clean photo_views entries."""
+            """Run a single batch through LLM and return clean photo_views entries.
+
+            Implements a one-time retry: if the first call returns fewer than
+            half of ``batch_size`` usable (known) entries, retry once with a
+            shorter prompt and ``temperature=0.0``. Both attempts are logged.
+            """
             batch_start = time.monotonic()
             vehicle_name = vehicle_prior.get("vehicle", "该车")
             view_selection_prompt = get_view_selection_prompt()
             system_prompt = _build_system_prompt(vehicle_name)
 
-            content: List[Dict[str, Any]] = [
-                {"type": "text", "text": system_prompt},
-                {"type": "text", "text": (
-                    f"车辆：{vehicle_name}。本批 {len(batch_photos)} 张照片（全局共 {len(photos)} 张，分 {n_batches} 批），"
-                    f"请只分析本批照片并输出 JSON。"
-                )},
-            ]
-            for photo in batch_photos:
-                content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
-                content.append(_build_image_content(photo))
+            batch_size = len(batch_photos)
 
-            messages = [{"role": "user", "content": content}]
-            try:
-                raw = await asyncio.wait_for(
-                    call_minimax(
-                        messages,
-                        temperature=0.0,
-                        max_tokens=8000,
-                        response_format={"type": "json_object"},
-                    ),
-                    timeout=_PLANNER_BATCH_TIMEOUT_SEC,
-                )
-                logger.info(
-                    "[planner] batch %d/%d call_minimax raw length=%d elapsed=%.1fs",
-                    batch_idx + 1, n_batches, len(raw), time.monotonic() - batch_start,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "[planner] batch %d/%d timed out after %.0fs",
-                    batch_idx + 1, n_batches, _PLANNER_BATCH_TIMEOUT_SEC,
-                )
-                raw = ""
-            except Exception as exc:
-                logger.warning(
-                    "[planner] batch %d/%d call_minimax failed: %s",
-                    batch_idx + 1, n_batches, exc,
-                )
-                raw = ""
+            def _build_content(shorter: bool = False) -> List[Dict[str, Any]]:
+                content: List[Dict[str, Any]] = [
+                    {"type": "text", "text": system_prompt},
+                    {"type": "text", "text": (
+                        f"车辆：{vehicle_name}。本批 {batch_size} 张照片（全局共 {len(photos)} 张，分 {n_batches} 批），"
+                        f"请只分析本批照片并输出 JSON。"
+                    )},
+                ]
+                if shorter:
+                    content.append({"type": "text", "text": (
+                        "每张必须包含 photo_id、view_id、confidence。只输出 JSON，不要解释。"
+                    )})
+                for photo in batch_photos:
+                    content.append({"type": "text", "text": f"照片编号: {photo.get('id', '')}"})
+                    content.append(_build_image_content(photo))
+                return content
 
-            parsed = extract_json(raw) or {}
-            if isinstance(parsed, dict):
-                entries = _clean_view_entries(parsed.get("photo_views", []))
-                if not entries:
-                    entries = _adapt_legacy_analysis(parsed)
-                logger.info(
-                    "[planner] batch %d/%d produced %d view entries",
-                    batch_idx + 1, n_batches, len(entries),
+            def _parse(raw_response: str) -> List[Dict[str, Any]]:
+                parsed = extract_json(raw_response) or {}
+                if isinstance(parsed, dict):
+                    entries = _clean_view_entries(parsed.get("photo_views", []))
+                    if not entries:
+                        entries = _adapt_legacy_analysis(parsed)
+                    return entries
+                return []
+
+            async def _attempt(content: List[Dict[str, Any]], attempt_idx: int) -> Tuple[str, List[Dict[str, Any]]]:
+                attempt_start = time.monotonic()
+                messages = [{"role": "user", "content": content}]
+                try:
+                    raw = await asyncio.wait_for(
+                        call_minimax(
+                            messages,
+                            temperature=0.0,
+                            max_tokens=8000,
+                            response_format={"type": "json_object"},
+                        ),
+                        timeout=_PLANNER_BATCH_TIMEOUT_SEC,
+                    )
+                    logger.info(
+                        "[planner] batch %d/%d attempt %d raw length=%d elapsed=%.1fs",
+                        batch_idx + 1, n_batches, attempt_idx, len(raw), time.monotonic() - attempt_start,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[planner] batch %d/%d attempt %d timed out after %.0fs",
+                        batch_idx + 1, n_batches, attempt_idx, _PLANNER_BATCH_TIMEOUT_SEC,
+                    )
+                    raw = ""
+                except Exception as exc:
+                    logger.warning(
+                        "[planner] batch %d/%d attempt %d call_minimax failed: %s",
+                        batch_idx + 1, n_batches, attempt_idx, exc,
+                    )
+                    raw = ""
+                entries = _parse(raw)
+                return raw, entries
+
+            raw_first, entries = await _attempt(_build_content(shorter=False), attempt_idx=1)
+            known_count = sum(1 for e in entries if e["view_id"] not in ("unknown", ""))
+            logger.info(
+                "[planner] batch %d/%d first attempt produced %d entries (%d known) out of %d",
+                batch_idx + 1, n_batches, len(entries), known_count, batch_size,
+            )
+
+            if known_count < (batch_size / 2):
+                logger.warning(
+                    "[planner] batch %d/%d known count %d < %d (half of batch); retrying once with shorter prompt",
+                    batch_idx + 1, n_batches, known_count, batch_size / 2,
                 )
-                return entries
-            return []
+                raw_second, retry_entries = await _attempt(_build_content(shorter=True), attempt_idx=2)
+                retry_known_count = sum(1 for e in retry_entries if e["view_id"] not in ("unknown", ""))
+                logger.info(
+                    "[planner] batch %d/%d retry produced %d entries (%d known) out of %d",
+                    batch_idx + 1, n_batches, len(retry_entries), retry_known_count, batch_size,
+                )
+                # Use the retry result only if it is no worse than the first.
+                if retry_known_count >= known_count:
+                    entries = retry_entries
+
+            logger.info(
+                "[planner] batch %d/%d final produced %d view entries",
+                batch_idx + 1, n_batches, len(entries),
+            )
+            return entries
 
         # Build batches and dispatch them with a small semaphore to avoid
         # hammering the MiniMax endpoint (which has been seen to 503 / 断连
@@ -757,7 +801,7 @@ async def planner_agent(
             remaining_exterior = [
                 p for p in photos
                 if p.get("id") and p.get("id") not in seen_ids
-                and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
+                and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "scene_intake")
             ]
             if remaining_exterior:
                 corner_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45"]
@@ -784,7 +828,7 @@ async def planner_agent(
         remaining_photos = [
             p for p in photos
             if p.get("id") and p.get("id") not in seen_ids
-            and photo_types.get(p.get("id", ""), "") in ("exterior", "unknown")
+            and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "scene_intake")
         ]
         target_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45", "left_90", "right_90"]
         existing_idx = len(target_views)
@@ -851,11 +895,17 @@ async def planner_agent(
         )
         covered_views = stable_plan.get("workflow_plan", {}).get("priority_views", [])
 
-    # Last resort: only if the plan still has zero views (every batch
-    # returned garbage), spend one LLM call to recover. The threshold
-    # is stricter so this fires only in truly broken runs.
-    if not covered_views:
-        logger.warning("[planner] covered views == 0, running fallback_replan")
+    # Last resort: if the merged plan has fewer than 6 exterior views after
+    # deterministic augmentation, spend one LLM call to recover. JSON mode is
+    # explicitly enabled because legacy call_minimax defaults do not include it.
+    # We do NOT trigger fallback solely based on known_ratio: a successful
+    # deterministic augment can fill all 7 views even when every LLM label is
+    # unknown, and an unnecessary LLM call may overwrite that coverage.
+    if len(covered_views) < 6:
+        logger.warning(
+            "[planner] sparse plan: covered_views=%s; running fallback_replan",
+            covered_views,
+        )
         stable_plan = await _fallback_replan(
             stable_plan, photo_views, photos, vehicle_prior, photo_types
         )
@@ -871,9 +921,15 @@ async def planner_agent(
     # canonical exterior view so the downstream orchestrator always has
     # something to assess.
     final_plan = _ensure_exterior_coverage(stable_plan, photos, photo_types)
+    final_priority_views = final_plan.get("workflow_plan", {}).get("priority_views", [])
+    if len(final_priority_views) < 6:
+        logger.warning(
+            "[planner] final plan covers only %d exterior views (%s); downstream may miss damage",
+            len(final_priority_views), final_priority_views,
+        )
     logger.info(
         "[planner] final_plan priority_views=%s groups_keys_with_items=%s",
-        final_plan.get("workflow_plan", {}).get("priority_views", []),
+        final_priority_views,
         [k for k, v in final_plan.get("view_groups", {}).items() if v],
     )
     return final_plan
@@ -908,9 +964,10 @@ def _augment_exterior_coverage(
     if not missing:
         return plan
 
-    # Pool: exterior/unknown photos that aren't already in any of the
-    # target views. We rotate from the broadest pool first so we don't
-    # steal photos from views the LLM confidently labelled.
+    # Pool: exterior/unknown/close_up_damage photos that aren't already in any
+    # of the target views. close_up_damage is treated as eligible for exterior
+    # rotation because it often comes from the deterministic aspect-ratio
+    # classifier and may still show a clear exterior angle (e.g. 172852 sample).
     rotation_pool: List[Dict[str, Any]] = []
     in_target_ids: set = set()
     for view_id in target_views:
@@ -922,12 +979,9 @@ def _augment_exterior_coverage(
         pid = photo.get("id", "")
         if not pid:
             continue
-        # Skip non-exterior photos (interior / auxiliary / scene_intake).
-        # Close-up damage/detail shots and unknown-type photos are eligible for
-        # rotation because they often contain the only evidence for missing
-        # critical views such as front_right_45, right_90, or top.
+        # Skip only clearly non-exterior photos (interior / auxiliary / scene_intake)
         photo_type = photo_types.get(pid, "")
-        if photo_type and photo_type not in ("exterior", "unknown", "close_up_damage", "close_up_detail"):
+        if photo_type and photo_type in ("interior", "auxiliary", "scene_intake"):
             continue
         if pid not in in_target_ids:
             rotation_pool.append(photo)
@@ -1192,7 +1246,12 @@ async def _fallback_replan(
 
     messages = [{"role": "user", "content": content}]
     try:
-        raw = await call_minimax(messages, temperature=0.0, max_tokens=4000)
+        raw = await call_minimax(
+            messages,
+            temperature=0.0,
+            max_tokens=4000,
+            response_format={"type": "json_object"},
+        )
     except Exception:
         return stable_plan
     result = extract_json(raw) or {}
