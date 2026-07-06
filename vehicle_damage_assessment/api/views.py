@@ -18,7 +18,7 @@ from django.http import JsonResponse, StreamingHttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from agents import (
-    assessment_orchestrator,
+    assessment_orchestrator_stream,
     build_vehicle_topology,
     damage_assessor_agent,
     extract_vehicle_info_from_auxiliary_photos,
@@ -265,13 +265,82 @@ def _error_stream(message: str) -> Generator[str, None, None]:
     yield _sse_event("error", {"message": message})
 
 
+def _part_state_to_dict(part_state: Any) -> Dict[str, Any]:
+    """Serialize a PartActualState (or already-dict value) to a frontend dict.
+
+    Uses :meth:`models.part_state.PartActualState.to_dict` for list-shape
+    `damage_type` / `evidence_photo` keys, which is what the frontend
+    progressive renderer expects.
+    """
+    try:
+        from models.part_state import PartActualState
+        if isinstance(part_state, PartActualState):
+            return part_state.to_dict()
+    except Exception:
+        pass
+    if isinstance(part_state, dict):
+        # Already a dict — coerce list-shape fields if string.
+        d = dict(part_state)
+        dt = d.get("damage_type")
+        if isinstance(dt, str):
+            d["damage_type"] = [s.strip() for s in dt.split(",") if s.strip()] or ["none"]
+        ep = d.get("evidence_photo")
+        if isinstance(ep, str):
+            d["evidence_photo"] = [s.strip() for s in ep.split(",") if s.strip()]
+        return d
+    return {}
+
+
 def _orchestrator_workflow_sync(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
 ) -> Generator[str, None, None]:
-    """Synchronous wrapper around the new orchestrator async workflow."""
-    yield from async_to_sync(_collect_orchestrator_events)(files, vehicle_info, plan=plan)
+    """Synchronous wrapper around the new orchestrator async workflow.
+
+    Streams events back to the client in real time — we drive the async
+    generator from a dedicated event loop on a worker thread, yielding each
+    SSE event as soon as the async side produces it.  Without this, a naive
+    ``async_to_sync(_collect_orchestrator_events)`` call would buffer every
+    event until the async generator finished, defeating the purpose of SSE.
+
+    修复(2026-07-04):之前的实现 `yield from async_to_sync(...)` 把所有事件
+    收集到 list 才一次性 yield,导致浏览器看到进度条"卡住"。现在用
+    bridge_thread + asyncio.run 让每个 SSE 事件立刻到达浏览器。
+    """
+    import asyncio
+    import threading
+    from queue import Queue, Empty
+
+    q: "Queue[str | None]" = Queue()
+
+    async def _bridge() -> None:
+        try:
+            async for event in _run_orchestrator_workflow(files, vehicle_info, plan=plan):
+                q.put(event)
+        except Exception as exc:  # propagate async errors as SSE error event
+            q.put(_sse_event("error", {"message": str(exc)}))
+        finally:
+            q.put(None)  # sentinel: done
+
+    def _run_bridge() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_bridge())
+        finally:
+            loop.close()
+
+    worker = threading.Thread(target=_run_bridge, daemon=True)
+    worker.start()
+
+    while True:
+        try:
+            item = q.get()
+        except Empty:
+            continue
+        if item is None:
+            break
+        yield item
 
 
 async def _collect_orchestrator_events(
@@ -349,16 +418,46 @@ async def _run_orchestrator_workflow(
                 "message": f"正在并发派发 {coverage_summary['covered_view_count']} 个 Vision Subagent...",
             },
         )
-        orchestrator_result = await assessment_orchestrator(files, vehicle_info, plan=plan)
-        yield _sse_event(
-            "subagent_progress",
-            {
-                "view_results": [
-                    {"view_id": r.get("view_id"), "part_count": len(r.get("parts", []))}
-                    for r in orchestrator_result.get("subagent_results", [])
-                ],
-            },
-        )
+
+        # ---- Progressive streaming: consume the orchestrator stream so each
+        # Vision Subagent completion is pushed to the client as it happens.
+        # 渐进渲染 (2026-07-04): 每个 view subagent 完成后立刻推送 subagent_partial,
+        # reviewer 完成推 review_partial,最终 result 事件保持兼容。
+        orchestrator_result = None
+        review: Dict[str, Any] = {}
+        async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan):
+            event_type = event.get("type")
+            if event_type == "subagent_complete":
+                sub_result = event.get("serializable_result", {})
+                view_id = sub_result.get("view_id", "unknown")
+                sub_parts = sub_result.get("parts", []) or []
+                serialized_parts = [
+                    _part_state_to_dict(p) for p in sub_parts
+                    if p is not None and (isinstance(p, dict) or hasattr(p, "part_id"))
+                ]
+                yield _sse_event(
+                    "subagent_partial",
+                    {
+                        "view_id": view_id,
+                        "parts": serialized_parts,
+                        "uncertain_items": sub_result.get("uncertain_items", []) or [],
+                        "additional_findings": sub_result.get("additional_findings", []) or [],
+                    },
+                )
+            elif event_type == "review":
+                review = event.get("review", {})
+                reviewed_states = review.get("reviewed_part_actual_states", []) or []
+                serialized_reviewed = [_part_state_to_dict(p) for p in reviewed_states]
+                yield _sse_event(
+                    "review_partial",
+                    {
+                        "reviewed_parts": serialized_reviewed,
+                        "summary": review.get("summary", ""),
+                        "needs_rephotography": review.get("needs_rephotography", []) or [],
+                    },
+                )
+            elif event_type == "final":
+                orchestrator_result = event.get("result")
 
         yield _sse_event(
             "step",
@@ -368,7 +467,6 @@ async def _run_orchestrator_workflow(
                 "message": "Reviewer Subagent 正在检查覆盖缺口和冲突...",
             },
         )
-        review = orchestrator_result.get("review", {})
         yield _sse_event("review", {"review_summary": review.get("summary", "")})
 
         yield _sse_event(

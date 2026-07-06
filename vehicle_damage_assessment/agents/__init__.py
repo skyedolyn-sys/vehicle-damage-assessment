@@ -19,7 +19,7 @@ from .view_mapping import (
 from .planner_agent import planner_agent, plan_to_location_map
 from .vision_subagent import vision_subagent
 from .reviewer_subagent import reviewer_subagent
-from .assessment_orchestrator import assessment_orchestrator
+from .assessment_orchestrator import assessment_orchestrator, assessment_orchestrator_stream
 
 __all__ = [
     "extract_vehicle_info_from_auxiliary_photos",
@@ -48,4 +48,5 @@ __all__ = [
     "vision_subagent",
     "reviewer_subagent",
     "assessment_orchestrator",
+    "assessment_orchestrator_stream",
 ]

@@ -9,6 +9,15 @@ multi-subagent workflow:
 3. Dispatch ``vision_subagent`` calls concurrently, one per view group.
 4. Run ``reviewer_subagent`` to resolve conflicts and identify coverage gaps.
 5. Synthesise final part states and run topology comparison.
+
+Two public entry points are provided:
+
+* ``assessment_orchestrator`` — the original async function that returns the
+  complete result dict. It is now a thin collector over the streaming
+  implementation so existing callers and tests keep working unchanged.
+* ``assessment_orchestrator_stream`` — an async generator that yields events as
+  the workflow progresses, enabling SSE endpoints to push per-view results to
+  the client in real time.
 """
 
 from __future__ import annotations
@@ -16,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, AsyncGenerator, Dict, List
 
 from agents import build_vehicle_topology, vehicle_prior_agent
 from agents.output_validator import _filter_uncertain_items
@@ -52,24 +61,40 @@ async def assessment_orchestrator(
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Run the full multi-subagent assessment workflow.
+    """Run the full multi-subagent assessment workflow and return the result dict.
 
-    Parameters
-    ----------
-    files:
-        Photo dicts with ``id``, ``path`` and optionally ``url``.
-    vehicle_info:
-        ``{"brand": ..., "model": ..., "year": ...}``.
-    plan:
-        Optional pre-computed planner result.  When provided, the orchestrator
-        skips its internal planner call, avoiding redundant LLM invocations in
-        streaming API contexts.
-
-    Returns
-    -------
-    dict
-        Assessment result compatible with ``output_validator``.
+    This is the backwards-compatible entry point. It consumes the streaming
+    implementation internally and returns the ``final`` event payload.
     """
+    final_event = None
+    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan):
+        if event.get("type") == "final":
+            final_event = event
+    if final_event is None:
+        raise RuntimeError("Orchestrator workflow did not produce a final event")
+    return final_event["result"]
+
+
+async def assessment_orchestrator_stream(
+    files: List[Dict[str, Any]],
+    vehicle_info: Dict[str, str],
+    plan: Dict[str, Any] | None = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Stream assessment workflow events as they become available.
+
+    Yields dictionaries with a ``type`` key. Callers that only need the final
+    result should use :func:`assessment_orchestrator` instead.
+    """
+    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan):
+        yield event
+
+
+async def _assessment_orchestrator_impl(
+    files: List[Dict[str, Any]],
+    vehicle_info: Dict[str, str],
+    plan: Dict[str, Any] | None = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Async generator that drives the workflow and yields progress events."""
     # ------------------------------------------------------------------
     # Step 1: Vehicle prior + topology
     # ------------------------------------------------------------------
@@ -88,15 +113,6 @@ async def assessment_orchestrator(
     view_groups = plan.get("view_groups", {})
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
-    def _expected_part_count(view_id: str, topology: VehicleTopology) -> int:
-        """Estimate how many distinct parts a healthy subagent result should contain."""
-        regions = get_regions_for_view(view_id)
-        expected_ids: set = set()
-        for region in regions:
-            for part_id in topology.regions.get(region, []):
-                expected_ids.add(part_id)
-        return len(expected_ids)
-
     async def run_view_subagent(view_id: str) -> Dict[str, Any]:
         photos = view_groups.get(view_id, [])
         logger.info("[orchestrator] dispatching vision subagent view=%s photo_count=%d", view_id, len(photos))
@@ -111,14 +127,8 @@ async def assessment_orchestrator(
                         vehicle_prior=vehicle_prior,
                         topology=topology,
                     )
-                    logger.info(
-                        "[orchestrator] vision subagent %s returned parts=%d states=%d",
-                        view_id,
-                        len(result.get("parts", [])),
-                        len(result.get("part_actual_states", [])),
-                    )
-                    return result
-                result = await vision_subagent(view_id, photos, vehicle_prior, topology)
+                else:
+                    result = await vision_subagent(view_id, photos, vehicle_prior, topology)
                 logger.info(
                     "[orchestrator] vision subagent %s returned parts=%d states=%d",
                     view_id,
@@ -130,26 +140,6 @@ async def assessment_orchestrator(
                 logger.error("[orchestrator] Vision subagent failed for %s: %s", view_id, exc, exc_info=True)
                 raise
 
-    def _is_anomaly(result: Dict[str, Any], view_id: str) -> bool:
-        """Detect empty or suspiciously incomplete subagent output."""
-        parts = result.get("parts", [])
-        states = result.get("part_actual_states", [])
-        if not parts and not states:
-            return True
-        expected = _expected_part_count(view_id, topology)
-        actual = len(states) if states else len(parts)
-        # Retry when fewer than half of expected parts are reported.
-        if expected > 0 and actual < expected / 2:
-            logger.warning(
-                "Anomaly detected for %s: %d/%d parts returned",
-                view_id, actual, expected,
-            )
-            return True
-        return False
-
-    # DAMAGE_RECOGNITION_POLICY §1.3: scene_intake 必须 dispatch;
-    # intake subagent 接收单张照片 + 已 dispatch 视角的 part 结论快照,
-    # 输出受损候选注入 fusion 的 damaged 候选池。
     views_to_run = [
         view_id for view_id in list(EXTERIOR_VIEWS) + ["scene_intake"]
         if view_groups.get(view_id)
@@ -167,19 +157,31 @@ async def assessment_orchestrator(
             "This usually means the planner failed to parse the photo set."
         )
 
-    subagent_tasks = [asyncio.create_task(run_view_subagent(view_id), name=view_id) for view_id in views_to_run]
-    subagent_results = await asyncio.gather(*subagent_tasks, return_exceptions=True)
-
+    # Run vision subagents concurrently but yield each completion immediately
+    # via asyncio.wait(FIRST_COMPLETED) instead of buffering with gather.
+    pending = {asyncio.create_task(run_view_subagent(view_id), name=view_id) for view_id in views_to_run}
     successful_results: List[Dict[str, Any]] = []
     retry_views: List[str] = []
-    for view_id, result in zip(views_to_run, subagent_results):
-        if isinstance(result, Exception):
-            logger.warning("Vision subagent %s failed: %s", view_id, result)
-            retry_views.append(view_id)
-            continue
-        if _is_anomaly(result, view_id):
-            retry_views.append(view_id)
-        successful_results.append(result)
+
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            view_id = task.get_name()
+            try:
+                result = task.result()
+            except Exception as exc:
+                logger.warning("Vision subagent %s failed: %s", view_id, exc)
+                retry_views.append(view_id)
+                continue
+            if _is_anomaly(result, view_id, topology):
+                retry_views.append(view_id)
+            successful_results.append(result)
+            yield {
+                "type": "subagent_complete",
+                "view_id": view_id,
+                "serializable_result": _serialize_subagent_result(result),
+                "is_retry": False,
+            }
 
     # Retry failed or anomalous views once, sequentially to reduce API pressure.
     if retry_views:
@@ -187,16 +189,25 @@ async def assessment_orchestrator(
         for view_id in retry_views:
             try:
                 retry_result = await vision_subagent(view_id, view_groups.get(view_id, []), vehicle_prior, topology)
-                if _is_anomaly(retry_result, view_id):
-                    logger.warning("Retry for %s still anomalous; keeping best effort", view_id)
-                # Replace the original anomalous result if retry is healthier.
                 original_index = next(
                     (i for i, r in enumerate(successful_results) if r.get("view_id") == view_id), None
                 )
-                if original_index is not None:
-                    successful_results[original_index] = retry_result
+                if _is_anomaly(retry_result, view_id, topology):
+                    logger.warning("Retry for %s still anomalous; keeping best effort", view_id)
+                    # Do not replace a non-anomalous original with an anomalous retry.
+                    if original_index is None:
+                        successful_results.append(retry_result)
                 else:
-                    successful_results.append(retry_result)
+                    if original_index is not None:
+                        successful_results[original_index] = retry_result
+                    else:
+                        successful_results.append(retry_result)
+                yield {
+                    "type": "subagent_complete",
+                    "view_id": view_id,
+                    "serializable_result": _serialize_subagent_result(retry_result),
+                    "is_retry": True,
+                }
             except Exception as exc:
                 logger.error("Retry failed for %s: %s", view_id, exc)
 
@@ -204,11 +215,12 @@ async def assessment_orchestrator(
     # Step 4: Reviewer checks conflicts, gaps and low-confidence items
     # ------------------------------------------------------------------
     review = await reviewer_subagent(successful_results, plan, vehicle_prior)
+    serializable_review = _serialize_review(review)
+    yield {"type": "review", "review": serializable_review}
 
     # ------------------------------------------------------------------
     # Step 5: Synthesise region results into unified part states
     # ------------------------------------------------------------------
-    # Convert subagent results into the shape expected by synthesizer_agent.
     region_results: List[Dict[str, Any]] = []
     for result in successful_results:
         region_results.append(
@@ -219,10 +231,8 @@ async def assessment_orchestrator(
             }
         )
 
-    # Use the synthesizer for deterministic merging with traceability.
     merged = synthesizer_agent(region_results, vehicle_prior, topology)
 
-    # Collect part_actual_states and apply reviewer overrides to objects directly.
     actual_states: List[PartActualState] = list(merged.get("part_actual_states", []))
     state_by_id: Dict[str, PartActualState] = {s.part_id: s for s in actual_states}
 
@@ -243,9 +253,6 @@ async def assessment_orchestrator(
     assessment = compare_topology(topology, actual_states)
     assessment_result = assessment.to_legacy_result()
 
-    # Merge uncertain items from reviewer and subagents, then filter out items
-    # whose referenced part has already been resolved (mirrors the logic that
-    # used to live in output_validator.validate_and_enrich).
     all_uncertain_items: List[Dict[str, Any]] = []
     for result in successful_results:
         all_uncertain_items.extend(result.get("uncertain_items", []))
@@ -254,7 +261,6 @@ async def assessment_orchestrator(
         all_uncertain_items, assessment_result.get("parts", [])
     )
 
-    # Collect photos excluded from exterior assessment for transparency.
     excluded_photos: List[Dict[str, Any]] = []
     seen_excluded_ids: set = set()
     for view_id in NON_EXTERIOR_VIEWS:
@@ -270,30 +276,13 @@ async def assessment_orchestrator(
                 )
                 seen_excluded_ids.add(photo_id)
 
-    # Collect additional_findings from all subagents for the final report.
     all_additional_findings: List[Dict[str, Any]] = []
     for result in successful_results:
         all_additional_findings.extend(result.get("additional_findings", []))
 
-    # Convert non-JSON-serializable PartActualState objects to plain dicts before
-    # returning.  The orchestrator still consumes the objects internally; callers
-    # of the HTTP endpoint receive JSON-safe structures.
-    serializable_results = []
-    for result in successful_results:
-        result_copy = dict(result)
-        result_copy["part_actual_states"] = [
-            s.to_legacy_dict() for s in result_copy.get("part_actual_states", [])
-            if isinstance(s, PartActualState)
-        ]
-        serializable_results.append(result_copy)
+    serializable_results = [_serialize_subagent_result(r) for r in successful_results]
 
-    serializable_review = dict(review)
-    serializable_review["reviewed_part_actual_states"] = [
-        s.to_legacy_dict() for s in serializable_review.get("reviewed_part_actual_states", [])
-        if isinstance(s, PartActualState)
-    ]
-
-    return {
+    final_result = {
         "vehicle_info": vehicle_info,
         "vehicle_prior": vehicle_prior,
         "topology": topology.to_dict(),
@@ -305,6 +294,66 @@ async def assessment_orchestrator(
         **assessment_result,
         "uncertain_items": all_uncertain_items,
     }
+
+    yield {"type": "final", "result": final_result}
+
+
+def _expected_part_count(view_id: str, topology: VehicleTopology) -> int:
+    """Estimate how many distinct parts a healthy subagent result should contain."""
+    regions = get_regions_for_view(view_id)
+    expected_ids: set = set()
+    for region in regions:
+        for part_id in topology.regions.get(region, []):
+            expected_ids.add(part_id)
+    return len(expected_ids)
+
+
+def _is_anomaly(result: Dict[str, Any], view_id: str, topology: VehicleTopology) -> bool:
+    """Detect empty or suspiciously incomplete subagent output."""
+    parts = result.get("parts", [])
+    states = result.get("part_actual_states", [])
+    if not parts and not states:
+        return True
+    # Primary stability failure mode: LLM returned no JSON/parts at all and
+    # everything was backfilled to uncertain.  vision_subagent flags this so
+    # orchestrator can trigger its own retry path.
+    if result.get("_llm_returned_empty"):
+        logger.warning(
+            "Anomaly detected for %s: LLM returned no usable parts; retry requested",
+            view_id,
+        )
+        return True
+    expected = _expected_part_count(view_id, topology)
+    actual = len(states) if states else len(parts)
+    if expected > 0 and actual < expected / 2:
+        logger.warning(
+            "Anomaly detected for %s: %d/%d parts returned",
+            view_id, actual, expected,
+        )
+        return True
+    return False
+
+
+def _serialize_subagent_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a subagent result to a JSON-safe dict."""
+    result_copy = dict(result)
+    result_copy["part_actual_states"] = [
+        s.to_legacy_dict() for s in result_copy.get("part_actual_states", [])
+        if isinstance(s, PartActualState)
+    ]
+    # Internal retry flag should not leak to clients.
+    result_copy.pop("_llm_returned_empty", None)
+    return result_copy
+
+
+def _serialize_review(review: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert reviewer output to a JSON-safe dict."""
+    review_copy = dict(review)
+    review_copy["reviewed_part_actual_states"] = [
+        s.to_legacy_dict() for s in review_copy.get("reviewed_part_actual_states", [])
+        if isinstance(s, PartActualState)
+    ]
+    return review_copy
 
 
 def _merge_subagent_results(
@@ -320,7 +369,6 @@ def _merge_subagent_results(
     from config import PARTS_BY_ID
     from models.part_state import PartActualState
 
-    # Collect all PartActualState objects keyed by part_id.
     state_by_id: Dict[str, PartActualState] = {}
 
     for result in subagent_results:
@@ -333,12 +381,10 @@ def _merge_subagent_results(
             else:
                 state_by_id[state.part_id] = _merge_two_states(existing, state)
 
-    # Apply reviewer overrides.
     for override in review.get("reviewed_part_actual_states", []):
         if isinstance(override, PartActualState) and override.part_id:
             state_by_id[override.part_id] = override
 
-    # Ensure every topology node has a state.
     parts: List[PartActualState] = []
     for node_id in topology.nodes:
         if node_id in state_by_id:
