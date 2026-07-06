@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import replace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Set
 
 from agents.rules import load_part_profile, load_region_units, load_view_weights
 from agents.view_mapping import canonicalize_view_id
@@ -103,6 +103,46 @@ def _severe_neighbors(
         and n.status in (Status.DAMAGED, Status.MISSING)
         and n.damage_level == DamageLevel.SEVERE
     ]
+
+
+# Markers emitted by agents.vision_subagent._enforce_positive_anchor (§2.1) and
+# _enforce_edge_visible (§2.2) when an originally-intact high-sensitivity part
+# was downgraded to uncertain for missing positive evidence / edge visibility.
+# When such a marker is present on any evidence source, the part's underlying
+# observation is INTACT — not just an unconfirmed UNCERTAIN.  Adjacency-based
+# damage propagation must respect this distinction (P1-B FP fix): an intact
+# origin must never be escalated to damaged by neighbour-based inference.
+_INTACT_ORIGIN_MARKERS = (
+    "缺少正向证据,已按政策 §2.1 降级为 uncertain",
+    "缺少正向证据",
+    "已按政策 §2.1 降级为 uncertain",
+    "仅边缘可见(≤1 张证据照片),已按政策 §2.2 降级为 uncertain",
+    "已按政策 §2.2 降级为 uncertain",
+)
+
+
+def _has_intact_origin_marker(part: PartActualState) -> bool:
+    """Return True if any evidence source note indicates an intact origin.
+
+    The vision-subagent validation layer (DAMAGE_RECOGNITION_POLICY §2.1 / §2.2)
+    downgrades originally-intact high-sensitivity parts to ``uncertain`` when
+    the LLM fails to include a positive anchor phrase or only an edge view
+    is available.  Those parts retain an "intact origin" marker in their notes
+    so that downstream adjacency rules can distinguish a true uncertain (no
+    positive observation either way) from a validation-downgraded intact
+    (the model observed an intact panel but lacked the required phrasing).
+    """
+    for src in part.evidence_sources or []:
+        notes = src.get("notes", "") if isinstance(src, dict) else ""
+        if not notes:
+            continue
+        if any(marker in notes for marker in _INTACT_ORIGIN_MARKERS):
+            return True
+    # Fall back to the part-level notes too in case the marker was lifted
+    # into the top-level notes field during synthesis.
+    if any(marker in (part.notes or "") for marker in _INTACT_ORIGIN_MARKERS):
+        return True
+    return False
 
 
 def _has_source_status(part: PartActualState, status: str, regions: Set[str]) -> bool:
@@ -357,6 +397,15 @@ class TopologyConsistencyEnforcer:
             and new_part.status in (Status.UNCERTAIN, Status.MISSING)
             and new_part.evidence_sources
         ):
+            # P1-B FP fix: a part that the vision layer marked intact but then
+            # downgraded to uncertain (positive-anchor / edge-visible rule) is
+            # fundamentally an INTACT observation.  Adjacency propagation must
+            # not escalate an intact origin to damaged, otherwise cascade
+            # through pillars produces same-side FP (172852: pillar_a_left
+            # was intact but downgraded; without this guard it gets flipped to
+            # damaged via roof_front propagation).
+            if _has_intact_origin_marker(new_part):
+                return new_part
             side = part.part_id.split("_")[-1]
             allowed = {
                 "roof_front",
@@ -397,6 +446,10 @@ class TopologyConsistencyEnforcer:
             and new_part.status in (Status.INTACT, Status.UNCERTAIN)
             and new_part.evidence_sources
         ):
+            # P1-B FP fix: do not flip an originally-intact part (downgraded
+            # to uncertain by §2.1/§2.2) to damaged via front-corner inference.
+            if _has_intact_origin_marker(new_part):
+                return new_part
             severe_front_structural = []
             for side in ("left", "right"):
                 pillar_id = f"pillar_a_{side}"
@@ -429,6 +482,12 @@ class TopologyConsistencyEnforcer:
             and new_part.status == Status.UNCERTAIN
             and new_part.evidence_sources
         ):
+            # P1-B FP fix: do not flip an originally-intact part (downgraded
+            # to uncertain by §2.1/§2.2) to damaged via neighbour inference.
+            # Otherwise trunk_lid (intact at primary view) cascades to damaged
+            # via roof_rear / pillar_c propagation in 172852-style cases.
+            if _has_intact_origin_marker(new_part):
+                return new_part
             if part.part_id == "roof_middle":
                 allowed = {"roof_front", "roof_rear", "sunroof_glass", "roof_rack"}
             else:

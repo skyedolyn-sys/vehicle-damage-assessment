@@ -19,9 +19,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, List, Set, Tuple
 
-from config import PARTS_BY_ID
-from models.part_state import DamageLevel, Status
-
 from agents.rules import load_part_view_priority
 
 
@@ -104,17 +101,166 @@ def _as_photo_list(raw: Any) -> List[str]:
     return to_photo_list(raw)
 
 
+# Negation prefixes that, when attached to a damage keyword, invert the
+# meaning (e.g. "无变形" / "未变形" / "未发现凹陷" all mean NO damage).  These
+# are stripped from the notes before keyword matching so the negative form
+# does not trigger a false damage signal.
+# Negation phrases that invert the meaning of a following damage keyword
+# (e.g. "未发现凹陷" / "无明显变形" / "无显著破损" all mean NO damage).
+# We replace the WHOLE negated phrase with a neutral token so the damage
+# keyword does not survive and trigger a false signal.
+_NEGATION_PHRASES = (
+    "无明显", "无显著", "无可见", "无发现", "无异常",
+    "未见", "未发现", "未观察到", "未出现", "未明显", "未出现明显",
+    "没有", "无任何",
+)
+
+# Negation adverbs that may appear immediately before a damage keyword
+# without an intervening space or character.  These are converted to a
+# neutral placeholder so the keyword itself is not matched.
+_NEGATION_ADVERBS = ("无", "未", "没有", "不")
+
+# Markers emitted by vision_subagent._enforce_positive_anchor (§2.1) and
+# _enforce_edge_visible (§2.2) when an originally-intact high-sensitivity part
+# was downgraded to uncertain for missing positive evidence / edge visibility.
+# When such a marker is present, the candidate's underlying observation is
+# INTACT — not a true UNCERTAIN — and fusion Rule 3 must NOT escalate it back
+# to ``damaged`` (mirrors the topology_comparator FP fix for Rule 9/10/11).
+_INTACT_ORIGIN_MARKERS = (
+    "缺少正向证据",
+    "已按政策 §2.1 降级为 uncertain",
+    "仅边缘可见(≤1 张证据照片)",
+    "已按政策 §2.2 降级为 uncertain",
+)
+
+
+def _has_intact_origin_marker_in_candidate(candidate: Dict[str, Any]) -> bool:
+    """Return True if the candidate's notes indicate an intact origin.
+
+    The vision-subagent validation layer (DAMAGE_RECOGNITION_POLICY §2.1 / §2.2)
+    downgrades originally-intact high-sensitivity parts to ``uncertain`` when
+    the LLM fails to include a positive anchor phrase or only an edge view
+    is available.  Those parts retain an "intact origin" marker in their
+    notes.  Fusion Rule 3 must respect this signal: the underlying observation
+    is intact, so the part must not be escalated to damaged via the
+    "one uncertain with strong signal" path.
+    """
+    notes = (candidate.get("notes", "") or "")
+    return any(marker in notes for marker in _INTACT_ORIGIN_MARKERS)
+
+
+def _strip_negations(notes: str) -> str:
+    """Remove Chinese/English negation forms so subsequent keyword matching
+    does not flag a sentence describing the ABSENCE of damage.
+
+    DAMAGE_RECOGNITION_POLICY §4.2: P1-B discovered that pillar parts
+    reported as "结构完整，无变形、断裂或褶皱" leak through into the
+    fusion Rule 3 ("one uncertain with strong signal") path because the
+    substring "裂" inside "断裂", "变形" inside the negation "无变形",
+    etc. all match the damage keyword list.  We replace the whole
+    "无X" / "未X" / "没有X" phrase with a neutral token so the keyword
+    matching pass does not count the negated phrase as positive evidence.
+    """
+    cleaned = notes
+
+    # Build a sorted list of damage keywords so longer keywords are matched
+    # before shorter substrings (e.g. "断裂" before "裂").
+    damage_keywords = [
+        "碎裂", "裂纹", "破裂", "断裂", "撕裂", "蛛网", "破损",
+        "变形", "凹陷", "塌陷", "褶皱", "脱落", "缺失", "暴露",
+        "翘起", "扭曲", "错位", "crack", "shatter", "broken", "tear",
+        "deform", "dent", "missing",
+    ]
+    damage_keywords.sort(key=len, reverse=True)
+
+    # Scan for negation adverbs and, if a damage keyword appears within a
+    # short window after the adverb, replace the whole span with a neutral
+    # token.  This handles both simple cases ("无变形") and decorated forms
+    # ("未发现凹陷", "未出现明显裂纹", "左侧无明显变形").
+    def _replace_negated_span(text: str, start: int, adverb: str) -> str:
+        window_end = min(start + len(adverb) + 12, len(text))
+        window = text[start + len(adverb):window_end]
+        for kw in damage_keywords:
+            idx = window.find(kw)
+            if idx != -1:
+                end = start + len(adverb) + idx + len(kw)
+                return text[:start] + "完好" + text[end:]
+        # English window can be a bit longer.
+        window_end_en = min(start + len(adverb) + 20, len(text))
+        window_en = text[start + len(adverb):window_end_en]
+        for kw in ("deform", "dent", "crack", "broken", "missing"):
+            idx = window_en.find(kw)
+            if idx != -1:
+                end = start + len(adverb) + idx + len(kw)
+                return text[:start] + "intact" + text[end:]
+        return text
+
+    # Handle multi-character negation phrases first so they are treated as
+    # single units and do not leave damage keywords behind.
+    negation_phrases = sorted(_NEGATION_PHRASES, key=len, reverse=True)
+    for phrase in negation_phrases:
+        start = cleaned.find(phrase)
+        while start != -1:
+            new_cleaned = _replace_negated_span(cleaned, start, phrase)
+            if new_cleaned is cleaned:
+                # No damage keyword followed this phrase; remove it anyway
+                # so it does not pollute downstream matching.
+                new_cleaned = cleaned[:start] + cleaned[start + len(phrase):]
+            cleaned = new_cleaned
+            start = cleaned.find(phrase)
+
+    # Single-character adverbs (无, 未, 没有, 不).
+    for adv in sorted(_NEGATION_ADVERBS, key=len, reverse=True):
+        start = cleaned.find(adv)
+        while start != -1:
+            new_cleaned = _replace_negated_span(cleaned, start, adv)
+            if new_cleaned is cleaned:
+                new_cleaned = cleaned[:start] + cleaned[start + len(adv):]
+            cleaned = new_cleaned
+            start = cleaned.find(adv)
+
+    return cleaned
+
+
 def _has_damage_signal(candidate: Dict[str, Any]) -> bool:
-    """Return True if a candidate has any indication of damage in its notes."""
+    """Return True if a candidate has any indication of damage in its notes.
+
+    DAMAGE_RECOGNITION_POLICY §4.2: only true positive damage phrases count;
+    a sentence like "无变形" (no deformation) must not be treated as a damage
+    signal.  We strip common Chinese/English negation forms before keyword
+    matching so that pillar parts reported as "结构完整，无变形、断裂或褶皱"
+    do not leak through into the fusion "Rule 3: one uncertain with strong
+    signal" path.
+
+    DAMAGE_RECOGNITION_POLICY §2.1 / §2.2: an originally-intact part that was
+    downgraded to uncertain by the validation layer (carrying the "缺少正向证据"
+    or "仅边缘可见" marker) is fundamentally an INTACT observation.  Even if the
+    notes still contain a positive damage keyword (e.g. "结构完整，无变形、断裂或
+    褶皱" still contains "裂" inside "断裂"), the intact origin must dominate
+    and the part must NOT be promoted to damaged by fusion Rule 3.
+    """
     if candidate.get("status") in ("damaged", "missing"):
         return True
+    # P1-B FP fix (fusion layer): an intact-origin marker means the
+    # underlying observation was INTACT, even though the status field now
+    # reads "uncertain".  Short-circuit so the negation-stripping /
+    # keyword-matching pass below cannot flip this back to damaged.
+    if _has_intact_origin_marker_in_candidate(candidate):
+        return False
     notes = (candidate.get("notes", "") or "").lower()
+    cleaned = _strip_negations(notes)
     keywords = [
-        "碎裂", "裂纹", "裂", "蛛网", "破损", "破裂", "缺", "撕裂", "塌陷",
+        "碎裂", "裂纹", "蛛网", "破损", "破裂", "缺", "撕裂", "塌陷",
         "变形", "凹陷", "褶皱", "脱落", "缺失", "暴露", "翘起", "扭曲",
         "crack", "shatter", "broken", "tear", "deform", "missing", "dent",
     ]
-    return any(kw in notes for kw in keywords)
+    # "裂" is too short to use after negation stripping because it
+    # also appears in many positive damage phrases (裂纹, 破裂, 碎裂).
+    # We only require it as a standalone damage signal in the *cleaned*
+    # string, which has had the negation forms removed.
+    if "裂" in cleaned:
+        return True
+    return any(kw in cleaned for kw in keywords)
 
 
 def _level_value(level: str) -> int:
