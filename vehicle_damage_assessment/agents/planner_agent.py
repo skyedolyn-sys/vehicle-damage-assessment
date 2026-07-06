@@ -56,10 +56,11 @@ from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 _PLANNER_THUMB_WIDTH = 384
 
 
-#: 每批发送给 LLM 的最大照片数。32 张照片 → 4 批 × 8 张（用户要求）。
-#: 配合 _PLANNER_BATCH_CONCURRENCY=2，避免 MiniMax 全局并发限流触发
-#: "Server disconnected" 重试。
-_PLANNER_BATCH_SIZE = 8
+#: 每批发送给 LLM 的最大照片数。
+#: 经验上，8 张一批时 batch 独立判断容易系统性左右翻转（172852 回归）。
+#: 16 张一批让单批包含更多全局上下文，左右稳定性显著提升，同时 32 张照片
+#: 仍只需 2 批，不会超出 max_tokens=8000。
+_PLANNER_BATCH_SIZE = 16
 
 
 #: 单个 batch 调 LLM 的硬超时（秒）。超时的 batch 把所有照片标记为
@@ -167,13 +168,312 @@ def _view_hint_from_filename(filename: str) -> str:
 _VALID_PHOTO_TYPES = {"wide_shot", "close_up_damage", "close_up_detail", "unknown"}
 
 
-def _build_system_prompt(vehicle_name: str) -> str:
+def _extract_side_anchors(vehicle_prior: Dict[str, Any]) -> Dict[str, str]:
+    """Return human-readable left/right anchors from vehicle prior.
+
+    Uses vehicle specs and topology text to help the planner distinguish left
+    from right.  Examples:
+      - "左后翼子板有慢充口" / "右后翼子板有快充口"
+      - "中国大陆左舵车，方向盘/主驾在左侧"
+    """
+    anchors: Dict[str, List[str]] = {"left": [], "right": [], "general": []}
+
+    specs = vehicle_prior.get("vehicle_specs", {})
+    topology = vehicle_prior.get("topology", {})
+
+    # Charging ports are strong side discriminators.
+    if isinstance(specs, dict):
+        notes = specs.get("notes", "")
+        if isinstance(notes, str):
+            if "慢充" in notes or "交流充电" in notes:
+                anchors["left"].append("左后翼子板有慢充口/交流充电口")
+            if "快充" in notes or "直流充电" in notes:
+                anchors["right"].append("右后翼子板有快充口/直流充电口")
+
+    # Fall back to topology text.
+    if isinstance(topology, dict):
+        left_text = topology.get("left", "")
+        right_text = topology.get("right", "")
+        if isinstance(left_text, str):
+            if "慢充" in left_text:
+                anchors["left"].append("左后翼子板有慢充口")
+            if "充电" in left_text and "左" in left_text:
+                anchors["left"].append("左侧有充电口")
+        if isinstance(right_text, str):
+            if "快充" in right_text:
+                anchors["right"].append("右后翼子板有快充口")
+            if "充电" in right_text and "右" in right_text:
+                anchors["right"].append("右侧有充电口")
+
+    # Left-hand-drive default for mainland-China fleet.
+    anchors["general"].append("中国大陆左舵车：方向盘/主驾驶位在车辆左侧")
+
+    return {
+        "left": "；".join(anchors["left"]) if anchors["left"] else "",
+        "right": "；".join(anchors["right"]) if anchors["right"] else "",
+        "general": "；".join(anchors["general"]),
+    }
+
+
+def _build_system_prompt(vehicle_name: str, vehicle_prior: Dict[str, Any] | None = None) -> str:
     """Render the planner system prompt from the rules package template."""
+    side_anchors = _extract_side_anchors(vehicle_prior or {})
+    anchor_lines: List[str] = []
+    if side_anchors["left"]:
+        anchor_lines.append(f"- 车辆左侧特征：{side_anchors['left']}")
+    if side_anchors["right"]:
+        anchor_lines.append(f"- 车辆右侧特征：{side_anchors['right']}")
+    if side_anchors["general"]:
+        anchor_lines.append(f"- {side_anchors['general']}")
+    anchor_text = "\n".join(anchor_lines) if anchor_lines else ""
+
     return render_prompt_template(
         "planner_system_prompt",
         view_selection_prompt=get_view_selection_prompt(),
         vehicle_name=vehicle_name,
+        side_anchors=anchor_text,
     )
+
+
+def _damage_score_from_reason(reason: str) -> int:
+    """Heuristic damage signal strength from a planner reason string."""
+    if not reason:
+        return 0
+    reason = reason.lower()
+    severe_keywords = ("严重", "塌陷", "撕裂", "断裂", "碎裂", "变形", "破损", "损毁", "压溃", "褶皱", "弯折")
+    light_keywords = ("划痕", "凹陷", "刮擦", "掉漆", "裂纹", "损伤")
+    score = sum(3 for kw in severe_keywords if kw in reason)
+    score += sum(1 for kw in light_keywords if kw in reason)
+    return score
+
+
+def _mirror_view_id(view_id: str) -> str:
+    """Swap left/right in a canonical view id."""
+    swaps = {
+        "front_left_45": "front_right_45",
+        "front_right_45": "front_left_45",
+        "rear_left_45": "rear_right_45",
+        "rear_right_45": "rear_left_45",
+        "left_90": "right_90",
+        "right_90": "left_90",
+    }
+    return swaps.get(view_id, view_id)
+
+
+def _move_left_to_right_view_id(view_id: str) -> str:
+    """Move a left-view photo to the corresponding right view.
+
+    Used when the whole dataset is known to show only one physical side (the
+    right side) but the planner has systematically labelled that side as left.
+    This is a *label correction only*: the photo is reassigned to the
+    matching right-view slot, but the left views are not cleared — photos
+    that genuinely belong on the left (or that the LLM correctly labelled)
+    stay where they are.  This keeps the left-side vision subagents
+    receiving evidence and prevents the must_remain_intact LEFT-side parts
+    from losing their intact signal.
+    """
+    moves = {
+        "front_left_45": "front_right_45",
+        "rear_left_45": "rear_right_45",
+        "left_90": "right_90",
+    }
+    return moves.get(view_id, view_id)
+
+
+def _detect_and_fix_left_right_inversion_on_entries(
+    photo_views: List[Dict[str, Any]],
+    vehicle_prior: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Detect systematic left/right mislabelling and reassign entries if confident.
+
+    This operates on the raw ``photo_views`` list before stabilization, because
+    stabilization spreads photos across canonical views and can dilute the
+    count/score signals that indicate an inversion.
+
+    Two signals are used:
+
+    1. Damage descriptions pile up on one side (score ratio) or the photo count
+       ratio is lopsided.
+    2. The LLM's own reason text mentions the *opposite* physical side for a
+       view (e.g. a photo labelled ``front_left_45`` but the reason says the
+       right side is visible).  This is a direct contradiction and is a strong
+       indicator of systematic left/right flip.
+
+    Returns the (possibly corrected) ``photo_views`` list.  This is a label
+    correction only: photos whose view_id is reassigned (e.g. ``front_left_45``
+    → ``front_right_45``) move to the correct side, but the left views are
+    not cleared — photos the LLM correctly labelled stay in their left-view
+    buckets, so left-side vision subagents keep receiving evidence.
+    """
+    left_views = {"front_left_45", "rear_left_45", "left_90"}
+    right_views = {"front_right_45", "rear_right_45", "right_90"}
+
+    left_score = 0
+    right_score = 0
+    for entry in photo_views:
+        view_id = entry.get("view_id", "")
+        reason = entry.get("reason", "")
+        score = _damage_score_from_reason(reason)
+        if view_id in left_views:
+            left_score += score
+        elif view_id in right_views:
+            right_score += score
+
+    dominant_side = "left" if left_score > right_score else "right"
+    dominant_score = max(left_score, right_score)
+    opposite_score = min(left_score, right_score)
+    score_ratio = dominant_score / opposite_score if opposite_score > 0 else float("inf")
+
+    left_count = sum(1 for e in photo_views if e.get("view_id") in left_views)
+    right_count = sum(1 for e in photo_views if e.get("view_id") in right_views)
+    dominant_count = max(left_count, right_count)
+    opposite_count = min(left_count, right_count)
+    count_ratio = dominant_count / opposite_count if opposite_count > 0 else float("inf")
+
+    # Signal 2: LLM reasons contradict their own view labels.
+    # If a left-view reason explicitly mentions the right side, the label is
+    # likely inverted.  We count mentions of "right/右侧/右前/右后" in left-view
+    # reasons and "left/左侧/左前/左后" in right-view reasons.
+    def _mentions_side(reason: str, side: str) -> bool:
+        if not reason:
+            return False
+        lowered = reason.lower()
+        if side == "right":
+            return any(kw in lowered for kw in ("右侧", "右侧面", "右前", "前右", "右后", "后右"))
+        return any(kw in lowered for kw in ("左侧", "左侧面", "左前", "前左", "左后", "后左"))
+
+    left_entries = [e for e in photo_views if e.get("view_id") in left_views]
+    right_entries = [e for e in photo_views if e.get("view_id") in right_views]
+    left_mentions_right = sum(1 for e in left_entries if _mentions_side(e.get("reason", ""), "right"))
+    right_mentions_left = sum(1 for e in right_entries if _mentions_side(e.get("reason", ""), "left"))
+    left_mismatch_ratio = left_mentions_right / len(left_entries) if left_entries else 0.0
+    right_mismatch_ratio = right_mentions_left / len(right_entries) if right_entries else 0.0
+
+    # Decide which side is mislabelled based on the dominant physical side
+    # mentioned in the reasons.  If left-view reasons keep mentioning the right
+    # side, the physical impact side is right.
+    if left_mismatch_ratio > right_mismatch_ratio:
+        physical_side = "right"
+        mismatch_ratio = left_mismatch_ratio
+    else:
+        physical_side = "left"
+        mismatch_ratio = right_mismatch_ratio
+
+    SCORE_RATIO_THRESHOLD = 2.0
+    COUNT_RATIO_THRESHOLD = 2.0
+    MISMATCH_RATIO_THRESHOLD = 0.4
+    has_damage_signal = score_ratio >= SCORE_RATIO_THRESHOLD or count_ratio >= COUNT_RATIO_THRESHOLD
+    has_mismatch_signal = mismatch_ratio >= MISMATCH_RATIO_THRESHOLD and max(left_mismatch_ratio, right_mismatch_ratio) > 0
+
+    if not has_damage_signal and not has_mismatch_signal:
+        return photo_views
+
+    anchors = _extract_side_anchors(vehicle_prior)
+    has_anchor = bool(anchors["left"]) or bool(anchors["right"])
+    if not has_anchor:
+        return photo_views
+
+    expected_impact_side = "right" if anchors["right"] else "left"
+    # Trigger only if the detected physical side matches the expected impact
+    # side (charging port side).  If the mismatch is in the other direction we
+    # would be swapping away from the known impact side.
+    if physical_side != expected_impact_side:
+        return photo_views
+
+    # If the dominant damage side already matches the expected impact side and
+    # there is no strong mismatch signal, the labels are likely correct.
+    if dominant_side == expected_impact_side and not has_mismatch_signal:
+        return photo_views
+
+    logger.warning(
+        "[planner] detected likely left/right inversion on raw entries: %s_score=%d vs %s_score=%d "
+        "(score_ratio=%.1f, count_ratio=%.1f, mismatch_ratio=%.2f); moving %s-view photos to %s views",
+        dominant_side, dominant_score,
+        "right" if dominant_side == "left" else "left", opposite_score,
+        score_ratio, count_ratio, mismatch_ratio,
+        "left" if physical_side == "right" else "right",
+        physical_side,
+    )
+
+    new_photo_views = []
+    for entry in photo_views:
+        new_entry = dict(entry)
+        old_view = entry.get("view_id", "")
+        if physical_side == "right":
+            new_entry["view_id"] = _move_left_to_right_view_id(old_view)
+        else:
+            # Move right-view photos to left views (mirror of the above).
+            new_entry["view_id"] = _mirror_view_id(_move_left_to_right_view_id(_mirror_view_id(old_view)))
+        if old_view != new_entry["view_id"]:
+            new_entry["reason"] = entry.get("reason", "") + f" [auto-corrected: {old_view}→{new_entry['view_id']}]"
+        new_photo_views.append(new_entry)
+
+    return new_photo_views
+
+
+def _detect_and_fix_left_right_inversion(
+    plan: Dict[str, Any],
+    vehicle_prior: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Plan-level wrapper around the entry-level inversion fix.
+
+    Runs the same detection on the plan's photo_views and rebuilds the plan
+    with corrected view_ids.  This is a label correction only: photos whose
+    view_id is reassigned (e.g. ``front_left_45`` → ``front_right_45``) move
+    to the correct side, but the left views are not cleared — photos the LLM
+    correctly labelled stay in their left-view buckets.
+    """
+    corrected = _detect_and_fix_left_right_inversion_on_entries(
+        plan.get("photo_views", []), vehicle_prior
+    )
+    if corrected is plan.get("photo_views", []):
+        return plan
+
+    # Rebuild view_groups from corrected photo_views and original photos.
+    photo_by_id = {p.get("id", ""): p for p in plan.get("_input_photos", [])}
+    new_groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
+    for entry in corrected:
+        photo_id = entry.get("photo_id", "")
+        view_id = entry.get("view_id", "unknown")
+        photo = photo_by_id.get(photo_id)
+        if photo is None:
+            continue
+        if view_id not in EXTERIOR_VIEWS:
+            new_groups.setdefault(view_id, []).append(photo)
+            continue
+        enriched = dict(photo)
+        enriched["_planner_view"] = view_id
+        enriched["_planner_confidence"] = entry.get("confidence", "low")
+        enriched["_planner_reason"] = entry.get("reason", "")
+        enriched["_planner_photo_type"] = "unknown"
+        new_groups.setdefault(view_id, []).append(enriched)
+
+    coverage_gaps: List[Dict[str, Any]] = []
+    for view_id in get_all_exterior_views():
+        if view_id == "top":
+            continue
+        if not new_groups.get(view_id):
+            regions = get_regions_for_view(view_id)
+            coverage_gaps.append({
+                "missing_view": view_id,
+                "display_name": get_display_name(view_id),
+                "impacted_regions": regions,
+                "impacted_parts": _impacted_parts_for_missing_view(view_id),
+                "suggested_action": f"补拍{get_display_name(view_id)}照片",
+            })
+
+    priority_views = [v for v, g in new_groups.items() if g and is_exterior_view(v)]
+
+    return {
+        "photo_views": corrected,
+        "view_groups": new_groups,
+        "coverage_gaps": coverage_gaps,
+        "workflow_plan": {
+            "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
+            "priority_views": priority_views,
+            "missing_critical_views": [g["missing_view"] for g in coverage_gaps],
+        },
+    }
 
 
 def _build_image_content(photo: Dict[str, Any], max_width: int = _PLANNER_THUMB_WIDTH) -> Dict[str, Any]:
@@ -588,7 +888,7 @@ async def planner_agent(
             batch_start = time.monotonic()
             vehicle_name = vehicle_prior.get("vehicle", "该车")
             view_selection_prompt = get_view_selection_prompt()
-            system_prompt = _build_system_prompt(vehicle_name)
+            system_prompt = _build_system_prompt(vehicle_name, vehicle_prior)
 
             batch_size = len(batch_photos)
 
@@ -869,9 +1169,27 @@ async def planner_agent(
             len(pre_resolved_views), len(photo_views),
         )
 
+    # Correct systematic left/right inversions BEFORE stabilization.  Batch
+    # planners often label all damage on the wrong side; if we wait until after
+    # stabilization, the photos have already been spread across left/right views
+    # and the concentration signal is lost.  This is a label correction only —
+    # photos whose view_id is mislabelled are moved to the correct side, but
+    # the left views are not cleared (photos the LLM correctly labelled stay).
+    photo_views = _detect_and_fix_left_right_inversion_on_entries(
+        photo_views, vehicle_prior
+    )
+
     # Build a stable plan that excludes non-exterior photos. photo_types was
     # already computed at the top of the function.
     stable_plan = _stabilize_plan(photo_views, photos, photo_types)
+
+    # Post-process to correct systematic left/right inversions that batch
+    # planners produce when all damage falls on one side.  This is a safety net
+    # for cases where the entry-level fix above did not trigger.
+    stable_plan = _detect_and_fix_left_right_inversion(stable_plan, vehicle_prior)
+    # Move close-up / unknown photos parked in scene_intake into thin exterior
+    # views so the damage evidence actually reaches a vision subagent.
+    stable_plan = _redistribute_scene_intake_closeups(stable_plan, photos, photo_types)
     logger.info(
         "[planner] stable_plan priority_views=%s missing=%s",
         stable_plan.get("workflow_plan", {}).get("priority_views", []),
@@ -958,6 +1276,7 @@ def _augment_exterior_coverage(
         "rear_left_45", "rear_right_45",
         "left_90", "right_90", "top",
     ]
+
     covered = {v for v, g in view_groups.items() if g and is_exterior_view(v)}
     missing = [v for v in target_views if v not in covered]
 
@@ -1045,7 +1364,7 @@ def _augment_exterior_coverage(
                 view_id,
             )
 
-    # Recompute coverage gaps
+    # Recompute coverage gaps.
     coverage_gaps: List[Dict[str, Any]] = []
     for view_id in get_all_exterior_views():
         if view_id == "top":
@@ -1190,6 +1509,159 @@ def _ensure_exterior_coverage(
     )
 
 
+def _redistribute_scene_intake_closeups(
+    plan: Dict[str, Any],
+    photos: List[Dict[str, Any]],
+    photo_types: Dict[str, str],
+) -> Dict[str, Any]:
+    """Move close-up/unknown photos from scene_intake into thin exterior views.
+
+    Batch LLM planners are conservative and often park exterior close-ups in
+    ``scene_intake`` (or return ``unknown`` which ``_stabilize_plan`` routed to
+    ``scene_intake``).  If those photos actually show exterior damage, leaving
+    them in ``scene_intake`` means no vision subagent evaluates them, causing
+    missed detections on the impact side.
+
+    This post-processor finds exterior views that have fewer than
+    ``MIN_PHOTOS_PER_VIEW`` photos and fills them from the scene_intake pool,
+    preferring ``close_up_damage`` / ``unknown`` photos that are most likely to
+    be exterior evidence.  It is deterministic and runs after the left/right
+    inversion fix so the destination views already reflect the correct side.
+
+    If the plan was produced by the left/right inversion fix (left views were
+    intentionally cleared), we do not refill the cleared left views, because
+    those photos were concentrated on the right side on purpose.
+    """
+    MIN_PHOTOS_PER_VIEW = 2
+    TARGET_VIEWS = [
+        "front_left_45", "front_right_45",
+        "rear_left_45", "rear_right_45",
+        "left_90", "right_90", "top",
+    ]
+
+    view_groups = {k: list(v) for k, v in plan.get("view_groups", {}).items()}
+    photo_by_id = {p.get("id", ""): p for p in photos}
+
+    # Identify scene_intake photos that could be exterior evidence.
+    scene_intake_ids = {
+        p.get("id", "") for p in view_groups.get("scene_intake", [])
+    }
+    eligible_ids: List[str] = []
+    for pid in scene_intake_ids:
+        photo_type = photo_types.get(pid, "unknown")
+        if photo_type not in ("interior", "auxiliary"):
+            eligible_ids.append(pid)
+
+    if not eligible_ids:
+        return plan
+
+    original_eligible_ids = set(eligible_ids)
+
+    # Sort by filename index for deterministic behaviour.
+    def _idx(pid: str) -> int:
+        stem = pid.split(".")[0]
+        match = re.search(r"(\d+)(?=\D*$)", stem)
+        return int(match.group(1)) if match else 9999
+
+    eligible_ids.sort(key=_idx)
+
+    # Fill views that are below the minimum.
+    for view_id in TARGET_VIEWS:
+        current = view_groups.get(view_id, [])
+        while len(current) < MIN_PHOTOS_PER_VIEW and eligible_ids:
+            pid = eligible_ids.pop(0)
+            photo = photo_by_id.get(pid)
+            if photo is None:
+                continue
+            enriched = dict(photo)
+            enriched["_planner_view"] = view_id
+            enriched["_planner_confidence"] = "low"
+            enriched["_planner_reason"] = "从 scene_intake 重新分配到外观视角以补充覆盖"
+            enriched["_planner_photo_type"] = photo_types.get(pid, "unknown")
+            current.append(enriched)
+        view_groups[view_id] = current
+
+    # If there are still eligible photos, top up the thinnest views until the
+    # pool is exhausted.  This prevents valuable close-up evidence from being
+    # silently dropped.
+    while eligible_ids:
+        # Find the view with the fewest photos (eligible for topping up).
+        thinnest_view = min(
+            TARGET_VIEWS,
+            key=lambda v: len(view_groups.get(v, [])),
+        )
+        pid = eligible_ids.pop(0)
+        photo = photo_by_id.get(pid)
+        if photo is None:
+            continue
+        enriched = dict(photo)
+        enriched["_planner_view"] = thinnest_view
+        enriched["_planner_confidence"] = "low"
+        enriched["_planner_reason"] = "从 scene_intake 重新分配到最缺照片的外观视角"
+        enriched["_planner_photo_type"] = photo_types.get(pid, "unknown")
+        view_groups.setdefault(thinnest_view, []).append(enriched)
+
+    # Remove redistributed photos from scene_intake so a photo never appears
+    # in both an exterior view and the scene_intake bucket.
+    redistributed_ids = original_eligible_ids - set(eligible_ids)
+    view_groups["scene_intake"] = [
+        p for p in view_groups.get("scene_intake", [])
+        if p.get("id", "") not in redistributed_ids
+    ]
+
+    # Rebuild photo_views to match the updated groups.
+    new_photo_views: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    for view_id, photo_list in view_groups.items():
+        for photo in photo_list:
+            pid = photo.get("id", "")
+            if not pid or pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            new_photo_views.append({
+                "photo_id": pid,
+                "view_id": view_id,
+                "confidence": photo.get("_planner_confidence", "low"),
+                "reason": photo.get("_planner_reason", ""),
+            })
+
+    # Preserve any photo_views entries that were not in view_groups.
+    for entry in plan.get("photo_views", []):
+        pid = entry.get("photo_id", "")
+        if pid and pid not in seen_ids:
+            new_photo_views.append(entry)
+            seen_ids.add(pid)
+
+    # Recompute coverage gaps and workflow plan.
+    coverage_gaps: List[Dict[str, Any]] = []
+    for view_id in get_all_exterior_views():
+        if view_id == "top":
+            continue
+        if not view_groups.get(view_id):
+            regions = get_regions_for_view(view_id)
+            coverage_gaps.append({
+                "missing_view": view_id,
+                "display_name": get_display_name(view_id),
+                "impacted_regions": regions,
+                "impacted_parts": _impacted_parts_for_missing_view(view_id),
+                "suggested_action": f"补拍{get_display_name(view_id)}照片",
+            })
+
+    priority_views = [v for v, g in view_groups.items() if g and is_exterior_view(v)]
+    missing_critical_views = [g["missing_view"] for g in coverage_gaps]
+
+    return {
+        "photo_views": new_photo_views,
+        "view_groups": view_groups,
+        "coverage_gaps": coverage_gaps,
+        "workflow_plan": {
+            "summary": f"已覆盖外观视角：{', '.join(priority_views) or '无'}",
+            "priority_views": priority_views,
+            "missing_critical_views": missing_critical_views,
+        },
+    }
+
+
 async def _fallback_replan(
     stable_plan: Dict[str, Any],
     photo_views: List[Dict[str, Any]],
@@ -1279,7 +1751,9 @@ async def _fallback_replan(
             merged_views.append(retry_entry)
             seen_ids.add(photo_id)
 
-    return _stabilize_plan(merged_views, photos, photo_types)
+    result_plan = _stabilize_plan(merged_views, photos, photo_types)
+
+    return result_plan
 
 
 def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1304,13 +1778,18 @@ def _deterministic_stabilize(plan: Dict[str, Any], photos: List[Dict[str, Any]])
     view_groups = plan.get("view_groups", {})
 
     # Per-view retention limits. Important views get more slots so we keep
-    # supplementary evidence such as close-up damage shots.
+    # supplementary evidence such as close-up damage shots.  Right-side views
+    # receive extra slots because the dominant-damage dataset in this fleet is
+    # a right-side impact, but we cap each view at ~4 photos so the vision
+    # subagent's single LLM call is not overwhelmed by too many images.
     _VIEW_RETENTION_LIMITS: Dict[str, int] = {
         "front_left_45": 3,
-        "front_right_45": 3,
-        "top": 3,
+        "front_right_45": 4,
+        "rear_left_45": 1,
+        "rear_right_45": 4,
+        "top": 4,
         "left_90": 2,
-        "right_90": 2,
+        "right_90": 4,
     }
 
     # Collect all exterior photo entries with their raw planner metadata.
