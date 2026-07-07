@@ -1,0 +1,22 @@
+# Claude Code / Dmux worktrees and hooks
+.claude/
+.dmux/
+.dmux-hooks/
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# UI regression screenshots
+ui-*.png
+
+# Python (extra safety at root)
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local sqlite databases
+db.sqlite3
+*.sqlite3
+
+# Logs
+*.log

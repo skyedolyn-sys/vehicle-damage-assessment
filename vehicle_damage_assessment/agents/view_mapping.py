@@ -31,6 +31,7 @@ STANDARD_VIEWS = [
     "top",
     "interior",
     "auxiliary",
+    "exclude",
     "unknown",
 ]
 
@@ -47,6 +48,7 @@ VIEW_DISPLAY_NAMES: Dict[str, str] = {
     "top": "车顶俯视",
     "interior": "内饰",
     "auxiliary": "辅助信息",
+    "exclude": "无参考价值",
     "unknown": "无法定位",
 }
 
@@ -102,10 +104,10 @@ EXTERIOR_VIEWS: Set[str] = {
 }
 
 #: Views that should be ignored by the exterior assessment pipeline.
-NON_EXTERIOR_VIEWS: Set[str] = {"interior", "auxiliary", "unknown", "scene_intake"}
+NON_EXTERIOR_VIEWS: Set[str] = {"interior", "auxiliary", "exclude", "unknown", "scene_intake"}
 
 #: Photo type categories used by the pre-filter before view planning.
-PHOTO_TYPE_CATEGORIES: Set[str] = {"exterior", "interior", "auxiliary", "unknown", "scene_intake"}
+PHOTO_TYPE_CATEGORIES: Set[str] = {"exterior", "interior", "auxiliary", "vehicle_info", "exclude", "unknown", "scene_intake"}
 
 
 def get_regions_for_view(view_id: str) -> List[str]:
