@@ -315,117 +315,115 @@ class TestBuildVehicleTopologyWithSpecs:
         return build_vehicle_topology(vehicle_info, vehicle_prior)
 
     def test_sedan_topology_has_trunk_lid_no_tailgate(self):
-        """Sedan topology: trunk_lid present, tailgate absent."""
+        """Sedan topology: trunk_lid standard_exists, tailgate standard_exists=False."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "trunk_lid" in topo.nodes
-        assert "tailgate" not in topo.nodes
-        # All 30 parts (31 - 1 tailgate)
-        assert len(topo.nodes) == 30
+        assert topo.get_node("trunk_lid").standard_exists is True
+        assert topo.get_node("tailgate").standard_exists is False
+        # All 33 canonical parts are retained.
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_suv_topology_has_tailgate_no_trunk_lid(self):
-        """SUV topology: tailgate present, trunk_lid absent."""
+        """SUV topology: tailgate standard_exists, trunk_lid standard_exists=False."""
         topo = self._build_with_specs({
             "body_style": "suv", "doors": 5,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "tailgate" in topo.nodes
-        assert "trunk_lid" not in topo.nodes
-        assert len(topo.nodes) == 30
+        assert topo.get_node("tailgate").standard_exists is True
+        assert topo.get_node("trunk_lid").standard_exists is False
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_coupe_topology_no_rear_doors(self):
-        """Coupe topology: no rear doors, trunk_lid."""
+        """Coupe topology: rear doors standard_exists=False, trunk_lid standard_exists."""
         topo = self._build_with_specs({
             "body_style": "coupe", "doors": 2,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "door_rear_left" not in topo.nodes
-        assert "door_rear_right" not in topo.nodes
-        assert "trunk_lid" in topo.nodes
-        assert "tailgate" not in topo.nodes
-        # 31 - 2 rear doors - 1 tailgate = 28
-        assert len(topo.nodes) == 28
+        assert topo.get_node("door_rear_left").standard_exists is False
+        assert topo.get_node("door_rear_right").standard_exists is False
+        assert topo.get_node("trunk_lid").standard_exists is True
+        assert topo.get_node("tailgate").standard_exists is False
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_2_door_sedan_no_rear_doors(self):
-        """2-door sedan: no rear doors."""
+        """2-door sedan: rear doors standard_exists=False."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 2,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "door_rear_left" not in topo.nodes
-        assert "door_rear_right" not in topo.nodes
-        assert len(topo.nodes) == 28  # 33 - tailgate - 2 rear doors - sunroof_glass - roof_rack
+        assert topo.get_node("door_rear_left").standard_exists is False
+        assert topo.get_node("door_rear_right").standard_exists is False
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_no_sunroof_no_sunroof_glass(self):
-        """No sunroof: sunroof_glass absent."""
+        """No sunroof: sunroof_glass standard_exists=False."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "sunroof_glass" not in topo.nodes
-        assert len(topo.nodes) == 30  # 31 - 1 tailgate (sedan)
+        assert topo.get_node("sunroof_glass").standard_exists is False
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_has_sunroof_has_sunroof_glass(self):
-        """Has sunroof: sunroof_glass present."""
+        """Has sunroof: sunroof_glass standard_exists=True."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": True, "has_roof_rack": False,
         })
-        assert "sunroof_glass" in topo.nodes
-        assert len(topo.nodes) == 31  # all parts (sedan has trunk_lid, no tailgate)
+        assert topo.get_node("sunroof_glass").standard_exists is True
+        assert len(topo.nodes) == len(PARTS_CATALOG)
 
     def test_no_roof_rack_no_roof_rack(self):
-        """No roof rack: roof_rack absent."""
+        """No roof rack: roof_rack standard_exists=False."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        assert "roof_rack" not in topo.nodes
+        assert topo.get_node("roof_rack").standard_exists is False
 
     def test_has_roof_rack_has_roof_rack(self):
-        """Has roof rack: roof_rack present."""
+        """Has roof rack: roof_rack standard_exists=True."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": True,
         })
-        assert "roof_rack" in topo.nodes
+        assert topo.get_node("roof_rack").standard_exists is True
 
-    def test_adjacency_filtered_to_present_parts(self):
-        """Adjacency lists only include parts that are present."""
+    def test_adjacency_kept_complete(self):
+        """Adjacency lists are always complete (new schema: 33 fixed nodes)."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
-        # bumper_rear should not reference tailgate (absent on sedan)
         bumper_rear = topo.get_node("bumper_rear")
-        assert "tailgate" not in bumper_rear.adjacent_nodes
+        # tailgate is still adjacent even on sedan; it just doesn't exist on this vehicle.
+        assert "tailgate" in bumper_rear.adjacent_nodes
         assert "trunk_lid" in bumper_rear.adjacent_nodes
 
-    def test_regions_filtered(self):
-        """Regions only contain present parts."""
+    def test_regions_contain_all_parts(self):
+        """Regions contain all catalog parts regardless of specs."""
         topo = self._build_with_specs({
             "body_style": "coupe", "doors": 2,
             "has_sunroof": False, "has_roof_rack": False,
         })
         left_ids = set(topo.regions["left"])
-        assert "door_rear_left" not in left_ids
+        assert "door_rear_left" in left_ids
         assert "door_front_left" in left_ids
         assert "mirror_left" in left_ids
         assert "fender_rear_left" in left_ids
-        assert len(topo.regions["left"]) == 6
 
-    def test_rear_region_filtered(self):
-        """Rear region has correct parts based on body style."""
+    def test_rear_region_has_both_trunk_lid_and_tailgate(self):
+        """Rear region contains both trunk_lid and tailgate for stability."""
         topo_sedan = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
         rear_ids = set(topo_sedan.regions["rear"])
         assert "trunk_lid" in rear_ids
-        assert "tailgate" not in rear_ids
-        assert len(topo_sedan.regions["rear"]) == 5
+        assert "tailgate" in rear_ids
+        assert len(topo_sedan.regions["rear"]) == 6
 
         topo_suv = self._build_with_specs({
             "body_style": "suv", "doors": 5,
@@ -433,34 +431,34 @@ class TestBuildVehicleTopologyWithSpecs:
         })
         rear_ids_suv = set(topo_suv.regions["rear"])
         assert "tailgate" in rear_ids_suv
-        assert "trunk_lid" not in rear_ids_suv
-        assert len(topo_suv.regions["rear"]) == 5
+        assert "trunk_lid" in rear_ids_suv
+        assert len(topo_suv.regions["rear"]) == 6
 
-    def test_roof_region_filtered(self):
-        """Roof region filters sunroof_glass and roof_rack."""
+    def test_roof_region_complete(self):
+        """Roof region always contains all roof parts."""
         topo = self._build_with_specs({
             "body_style": "sedan", "doors": 4,
             "has_sunroof": False, "has_roof_rack": False,
         })
         roof_ids = set(topo.regions["roof"])
-        assert "sunroof_glass" not in roof_ids
-        assert "roof_rack" not in roof_ids
+        assert "sunroof_glass" in roof_ids
+        assert "roof_rack" in roof_ids
         assert "roof_front" in roof_ids
         assert "roof_middle" in roof_ids
         assert "roof_rear" in roof_ids
-        assert len(topo.regions["roof"]) == 3
+        assert len(topo.regions["roof"]) == 5
 
     def test_topology_to_dict_with_specs(self):
-        """topology_to_dict works with filtered topology."""
+        """topology_to_dict works with the fixed 33-node topology."""
         topo = self._build_with_specs({
             "body_style": "coupe", "doors": 2,
             "has_sunroof": False, "has_roof_rack": False,
         })
         d = topology_to_dict(topo)
         assert d["vehicle_id"] == "v-specs"
-        assert "tailgate" not in d["nodes"]
+        assert "tailgate" in d["nodes"]
         assert "trunk_lid" in d["nodes"]
-        assert "door_rear_left" not in d["nodes"]
+        assert "door_rear_left" in d["nodes"]
         assert "regions" in d
 
     def test_backward_compatible_no_specs(self):

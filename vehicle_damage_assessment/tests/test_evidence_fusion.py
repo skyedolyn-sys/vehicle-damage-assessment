@@ -26,7 +26,7 @@ class TestFuseEvidence:
     def test_no_fusion_for_intact_part(self):
         candidates = [
             _fake_candidate("windshield_front", "front", status="intact"),
-            _fake_candidate("windshield_front", "front_left_45", status="intact"),
+            _fake_candidate("windshield_front", "front_left", status="intact"),
         ]
         assert fuse_evidence("windshield_front", candidates) is None
 
@@ -43,7 +43,7 @@ class TestFuseEvidence:
             ),
             _fake_candidate(
                 "windshield_front",
-                "front_left_45",
+                "front_left",
                 status="damaged",
                 damage_level="severe",
                 evidence_photo=["p2.png"],
@@ -62,13 +62,13 @@ class TestFuseEvidence:
         candidates = [
             _fake_candidate(
                 "roof_front",
-                "front_right_45",
+                "front_right",
                 status="uncertain",
                 notes="看到明显褶皱变形",
             ),
             _fake_candidate(
                 "roof_front",
-                "front_left_45",
+                "front_left",
                 status="uncertain",
                 notes="部分车顶有撕裂痕迹",
             ),
@@ -84,12 +84,12 @@ class TestFuseEvidence:
         candidates = [
             _fake_candidate(
                 "headlight_front_left",
-                "front_left_45",  # primary
+                "front_left",  # primary
                 status="intact",
             ),
             _fake_candidate(
                 "headlight_front_left",
-                "left_90",
+                "left",
                 status="uncertain",
                 notes="可能存在破损",  # ambiguous
             ),
@@ -131,7 +131,7 @@ class TestFuseEvidence:
             ),
             _fake_candidate(
                 "bumper_front",
-                "front_left_45",
+                "front_left",
                 status="damaged",
                 damage_level="light",
             ),
@@ -145,8 +145,8 @@ class TestCollectEvidence:
             {"view_id": "front", "parts": [
                 _fake_candidate("windshield_front", "front", status="intact"),
             ]},
-            {"view_id": "front_left_45", "parts": [
-                _fake_candidate("windshield_front", "front_left_45", status="uncertain"),
+            {"view_id": "front_left", "parts": [
+                _fake_candidate("windshield_front", "front_left", status="uncertain"),
             ]},
         ]
         evidence = collect_part_evidence(results)
@@ -179,7 +179,7 @@ class TestApplyFusionEndToEnd:
                 ),
                 _fake_candidate(
                     "windshield_front",
-                    "front_left_45",
+                    "front_left",
                     status="damaged",
                     damage_level="severe",
                     evidence_photo=["p2.png"],
@@ -218,10 +218,10 @@ class TestPhotoListNormalization:
 
     def test_collect_part_evidence_handles_string_photos(self):
         results = [
-            {"view_id": "rear_left_45", "parts": [
+            {"view_id": "rear_left", "parts": [
                 _fake_candidate(
                     "windshield_rear",
-                    "rear_left_45",
+                    "rear_left",
                     status="damaged",
                     damage_level="moderate",
                     evidence_photo="172852-04.png, 172852-03.png",
@@ -234,19 +234,19 @@ class TestPhotoListNormalization:
 
     def test_collect_part_evidence_handles_string_photos_when_merging(self):
         results = [
-            {"view_id": "rear_left_45", "parts": [
+            {"view_id": "rear_left", "parts": [
                 _fake_candidate(
                     "windshield_rear",
-                    "rear_left_45",
+                    "rear_left",
                     status="damaged",
                     damage_level="moderate",
                     evidence_photo=["172852-04.png", "172852-03.png"],
                 ),
             ]},
-            {"view_id": "rear_right_45", "parts": [
+            {"view_id": "rear_right", "parts": [
                 _fake_candidate(
                     "windshield_rear",
-                    "rear_right_45",
+                    "rear_right",
                     status="damaged",
                     damage_level="moderate",
                     evidence_photo="172852-04.png, 172852-03.png",
@@ -265,7 +265,7 @@ class TestPhotoListNormalization:
         candidates = [
             _fake_candidate(
                 "windshield_rear",
-                "rear_left_45",
+                "rear_left",
                 status="damaged",
                 damage_level="moderate",
                 evidence_photo="172852-04.png, 172852-03.png",
@@ -277,19 +277,19 @@ class TestPhotoListNormalization:
 
     def test_apply_fusion_returns_intact_photo_list(self):
         results = [
-            {"view_id": "rear_left_45", "parts": [
+            {"view_id": "rear_left", "parts": [
                 _fake_candidate(
                     "windshield_rear",
-                    "rear_left_45",
+                    "rear_left",
                     status="damaged",
                     damage_level="moderate",
                     evidence_photo="172852-04.png, 172852-03.png",
                 ),
             ]},
-            {"view_id": "rear_right_45", "parts": [
+            {"view_id": "rear_right", "parts": [
                 _fake_candidate(
                     "windshield_rear",
-                    "rear_right_45",
+                    "rear_right",
                     status="damaged",
                     damage_level="moderate",
                     evidence_photo="172852-04.png",

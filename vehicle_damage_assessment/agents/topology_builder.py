@@ -1,4 +1,9 @@
-"""Topology builder — constructs VehicleTopology from vehicle info and prior."""
+"""Topology builder — constructs VehicleTopology from vehicle info and prior.
+
+The graph always contains all 33 canonical parts so that prompts and
+comparison rules remain stable.  Vehicle specs only influence whether a
+part is ``standard_exists`` for this specific vehicle.
+"""
 
 from typing import Any, Dict, List
 
@@ -87,9 +92,9 @@ def build_vehicle_topology(
     Returns
     -------
     VehicleTopology
-        Topology graph with only the parts relevant to this vehicle's
-        body style and features.  Backward-compatible: if no
-        ``vehicle_specs`` is present, defaults to all parts.
+        Topology graph containing all 33 canonical parts.  Vehicle specs
+        determine ``standard_exists`` on each node; when no specs are
+        available all nodes default to existing.
     """
 
     adjacency = PARTS_TOPOLOGY["adjacency"]
@@ -100,31 +105,21 @@ def build_vehicle_topology(
     prior_anchors = vehicle_prior.get("key_anchors", {})
 
     # Extract vehicle specs — backward-compatible: if no vehicle_specs present,
-    # include ALL parts (no filtering)
+    # assume all parts exist.
     raw_specs = vehicle_prior.get("vehicle_specs", {})
     has_specs = isinstance(raw_specs, dict) and raw_specs
     if has_specs:
         specs = VehicleSpecs.from_dict(raw_specs)
-        present_part_ids = compute_present_part_ids(specs)
-        present_set = set(present_part_ids)
+        present_set = set(compute_present_part_ids(specs))
     else:
-        # Backward-compatible: no specs means all parts present
         present_set = _ALL_PART_IDS
 
     nodes: Dict[str, TopologyNode] = {}
     regions: Dict[str, List[str]] = {}
 
-    # Roof sub-region mapping for views that see only an edge of the roof.
-    roof_sub_regions: Dict[str, List[str]] = {
-        "roof_front": ["roof_front", "sunroof_glass"],
-        "roof_middle": ["roof_middle", "sunroof_glass", "roof_rack"],
-        "roof_rear": ["roof_rear"],
-    }
-
     for part in PARTS_CATALOG:
         part_id = part["part_id"]
-        if part_id not in present_set:
-            continue
+        standard_exists = part_id in present_set
 
         region = part["part_category"]
         side = part["side"]
@@ -143,12 +138,9 @@ def build_vehicle_topology(
         if isinstance(region_anchors, list):
             key_anchors = [str(a).strip() for a in region_anchors]
 
-        # Filter adjacency to only present parts
-        raw_adjacent = adjacency.get(part_id, [])
-        filtered_adjacent = [a for a in raw_adjacent if a in present_set]
+        # Adjacency is always built from the full catalog so rules stay stable.
+        filtered_adjacent = adjacency.get(part_id, [])
 
-        # Filter visibility to only present parts (visibility is independent,
-        # but we keep it as-is since it describes camera angles, not parts)
         node = TopologyNode(
             node_id=part_id,
             part_id=part_id,
@@ -156,22 +148,15 @@ def build_vehicle_topology(
             node_type=node_types.get(part_id, "panel"),
             region=region,
             side=side,
-            adjacent_nodes=filtered_adjacent,
+            adjacent_nodes=list(filtered_adjacent),
             standard_features=standard_features,
             key_anchors=key_anchors,
             visibility_from=list(visibility.get(part_id, [])),
+            standard_exists=standard_exists,
         )
         nodes[part_id] = node
 
         regions.setdefault(region, []).append(part_id)
-
-    # Register roof sub-regions so views can map to them without duplicating nodes.
-    for sub_region, part_ids in roof_sub_regions.items():
-        filtered_ids = [pid for pid in part_ids if pid in present_set]
-        if filtered_ids:
-            regions.setdefault(sub_region, []).extend(filtered_ids)
-            # Deduplicate while preserving order
-            regions[sub_region] = list(dict.fromkeys(regions[sub_region]))
 
     return VehicleTopology(
         vehicle_id=vehicle_info.get("vehicle_id", "unknown"),

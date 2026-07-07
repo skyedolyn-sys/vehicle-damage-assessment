@@ -66,13 +66,13 @@ _HIGH_SENSITIVITY_PARTS = {
 #: from a view that is the canonical vantage for a part.
 _VIEW_REGION_TAG: Dict[str, str] = {
     "front": "front",
-    "front_left_45": "front_left",
-    "front_right_45": "front_right",
+    "front_left": "front_left",
+    "front_right": "front_right",
     "rear": "rear",
-    "rear_left_45": "rear_left",
-    "rear_right_45": "rear_right",
-    "left_90": "left",
-    "right_90": "right",
+    "rear_left": "rear_left",
+    "rear_right": "rear_right",
+    "left": "left",
+    "right": "right",
     "top": "roof",
 }
 

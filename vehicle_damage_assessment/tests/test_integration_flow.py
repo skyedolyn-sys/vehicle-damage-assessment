@@ -38,14 +38,14 @@ class TestIntegrationBuildAndCompare:
     """End-to-end: build topology from vehicle info, compare with actual states."""
 
     def test_build_topology_has_all_nodes(self, sample_vehicle_info, sample_vehicle_prior):
-        """Building a topology yields 33 nodes and correct vehicle metadata."""
+        """Building a topology yields 33 nodes and 5 canonical regions."""
         topo = build_vehicle_topology(sample_vehicle_info, sample_vehicle_prior)
 
         assert isinstance(topo, VehicleTopology)
         assert topo.vehicle_id == "v-int-001"
         assert topo.vehicle_name == "Integration Test Sedan"
         assert len(topo.nodes) == 33
-        assert len(topo.regions) == 8
+        assert len(topo.regions) == 5
 
     def test_compare_output_has_required_keys(self, sample_vehicle_info, sample_vehicle_prior):
         """The DamageAssessment result contains all required top-level keys."""

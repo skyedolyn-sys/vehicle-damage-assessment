@@ -3,9 +3,9 @@
 # In Phase 1 this data is centralized; the consuming logic remains in
 # agents/synthesizer.py.
 #
-# IMPORTANT: view ids must be STANDARD_VIEW ids (front_left_45, left_90, ...)
-# as used by assessment_orchestrator/planner_agent.  Short aliases such as
-# "left" or "front_left" are NOT matched at runtime.
+# IMPORTANT: view ids must match the new 9-view schema (front_left, left, ...)
+# used by view_agent / master_agent.  Legacy ids such as "front_left_45" or
+# "left_90" are normalized at runtime but should not appear here.
 default:
   # Per-part view priority table used by evidence_fusion.  Lower number =
   # more authoritative canonical view.  priority 99 = effectively invisible.
@@ -13,168 +13,168 @@ default:
   part_view_priority:
     windshield_front:
       front: 0
-      front_left_45: 1
-      front_right_45: 1
+      front_left: 1
+      front_right: 1
       rear: 99
-      rear_left_45: 99
-      rear_right_45: 99
+      rear_left: 99
+      rear_right: 99
     windshield_rear:
       rear: 0
-      rear_left_45: 1
-      rear_right_45: 1
+      rear_left: 1
+      rear_right: 1
       front: 99
-      front_left_45: 99
-      front_right_45: 99
+      front_left: 99
+      front_right: 99
     sunroof_glass:
       top: 0
-      left_90: 2
-      right_90: 2
+      left: 2
+      right: 2
       front: 1
-      front_left_45: 1
-      front_right_45: 1
+      front_left: 1
+      front_right: 1
     roof_front:
       front: 0
-      front_left_45: 1
-      front_right_45: 1
+      front_left: 1
+      front_right: 1
     roof_middle:
-      left_90: 0
-      right_90: 0
+      left: 0
+      right: 0
       top: 0
       front: 1
       rear: 1
     roof_rear:
       rear: 0
-      rear_left_45: 1
-      rear_right_45: 1
+      rear_left: 1
+      rear_right: 1
     headlight_front_left:
       front: 0
-      front_left_45: 0
-      left_90: 0
+      front_left: 0
+      left: 0
     headlight_front_right:
       front: 0
-      front_right_45: 0
-      right_90: 0
+      front_right: 0
+      right: 0
     taillight_rear_left:
       rear: 0
-      rear_left_45: 0
-      left_90: 0
+      rear_left: 0
+      left: 0
     taillight_rear_right:
       rear: 0
-      rear_right_45: 0
-      right_90: 0
+      rear_right: 0
+      right: 0
     mirror_left:
-      left_90: 0
-      front_left_45: 1
-      rear_left_45: 1
+      left: 0
+      front_left: 1
+      rear_left: 1
     mirror_right:
-      right_90: 0
-      front_right_45: 1
-      rear_right_45: 1
+      right: 0
+      front_right: 1
+      rear_right: 1
     door_front_left:
-      left_90: 0
-      front_left_45: 1
-      rear_left_45: 1
+      left: 0
+      front_left: 1
+      rear_left: 1
     door_front_right:
-      right_90: 0
-      front_right_45: 1
-      rear_right_45: 1
+      right: 0
+      front_right: 1
+      rear_right: 1
     door_rear_left:
-      left_90: 0
-      rear_left_45: 1
-      front_left_45: 1
+      left: 0
+      rear_left: 1
+      front_left: 1
     door_rear_right:
-      right_90: 0
-      rear_right_45: 1
-      front_right_45: 1
+      right: 0
+      rear_right: 1
+      front_right: 1
     fender_front_right:
       front: 0
-      front_right_45: 0
-      right_90: 0
+      front_right: 0
+      right: 0
 
   primary_view:
     door_front_left:
-      - left_90
+      - left
     door_rear_left:
-      - left_90
+      - left
     door_front_right:
-      - right_90
+      - right
     door_rear_right:
-      - right_90
+      - right
     mirror_left:
-      - left_90
+      - left
     mirror_right:
-      - right_90
+      - right
     roof_front:
       - front
     roof_middle:
       - top
-      - left_90
-      - right_90
+      - left
+      - right
     roof_rear:
       - rear
     sunroof_glass:
       - top
     pillar_a_left:
-      - front_left_45
+      - front_left
     pillar_a_right:
-      - front_right_45
+      - front_right
     pillar_b_left:
-      - left_90
+      - left
     pillar_b_right:
-      - right_90
+      - right
     pillar_c_left:
-      - rear_left_45
+      - rear_left
     pillar_c_right:
-      - rear_right_45
+      - rear_right
 
   view_weights:
     door_front_left:
       primary:
-        - left_90
+        - left
       secondary:
-        - front_left_45
-        - rear_left_45
+        - front_left
+        - rear_left
     door_rear_left:
       primary:
-        - left_90
+        - left
       secondary:
-        - front_left_45
-        - rear_left_45
+        - front_left
+        - rear_left
     door_front_right:
       primary:
-        - right_90
+        - right
       secondary:
-        - front_right_45
-        - rear_right_45
+        - front_right
+        - rear_right
     door_rear_right:
       primary:
-        - right_90
+        - right
       secondary:
-        - rear_right_45
-        - front_right_45
+        - rear_right
+        - front_right
     mirror_left:
       primary:
-        - left_90
+        - left
       secondary:
-        - front_left_45
-        - rear_left_45
+        - front_left
+        - rear_left
     mirror_right:
       primary:
-        - right_90
+        - right
       secondary:
-        - front_right_45
-        - rear_right_45
+        - front_right
+        - rear_right
     roof_front:
       primary:
         - front
       secondary:
-        - front_left_45
-        - front_right_45
+        - front_left
+        - front_right
     roof_middle:
       primary:
         - top
-        - left_90
-        - right_90
+        - left
+        - right
       secondary:
         - front
         - rear
@@ -182,67 +182,67 @@ default:
       primary:
         - rear
       secondary:
-        - rear_left_45
-        - rear_right_45
+        - rear_left
+        - rear_right
     sunroof_glass:
       primary:
         - top
       secondary:
         - front
-        - front_left_45
-        - front_right_45
+        - front_left
+        - front_right
         - rear
-        - rear_left_45
-        - rear_right_45
+        - rear_left
+        - rear_right
     pillar_a_left:
       primary:
-        - front_left_45
+        - front_left
       secondary:
-        - left_90
+        - left
         - top
     pillar_a_right:
       primary:
-        - front_right_45
+        - front_right
       secondary:
-        - right_90
+        - right
         - top
     pillar_b_left:
       primary:
-        - left_90
+        - left
       secondary:
-        - front_left_45
-        - rear_left_45
+        - front_left
+        - rear_left
         - top
     pillar_b_right:
       primary:
-        - right_90
+        - right
       secondary:
-        - front_right_45
-        - rear_right_45
+        - front_right
+        - rear_right
         - top
     pillar_c_left:
       primary:
-        - rear_left_45
+        - rear_left
       secondary:
-        - left_90
+        - left
         - top
     pillar_c_right:
       primary:
-        - rear_right_45
+        - rear_right
       secondary:
-        - right_90
+        - right
         - top
 
   roof_primary_regions:
     - top
 
   roof_secondary_regions:
-    - left_90
-    - right_90
-    - front_left_45
-    - front_right_45
+    - left
+    - right
+    - front_left
+    - front_right
     - rear
-    - rear_left_45
-    - rear_right_45
+    - rear_left
+    - rear_right
 
 by_vehicle_type: {}

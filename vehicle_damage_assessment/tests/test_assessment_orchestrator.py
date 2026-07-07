@@ -1,11 +1,11 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from agents.assessment_orchestrator import _merge_two_states
+from agents.master_agent import _apply_review_overrides
 from models.part_state import DamageLevel, PartActualState, Status
 
 
-def test_merge_two_states_takes_worst_status():
+def test_apply_review_overrides_takes_worst_status():
     a = PartActualState(
         part_id="hood",
         part_name="引擎盖",
@@ -24,13 +24,14 @@ def test_merge_two_states_takes_worst_status():
         damage_level=DamageLevel.MODERATE,
         confidence="medium",
     )
-    merged = _merge_two_states(a, b)
-    assert merged.status == Status.DAMAGED
-    assert merged.damage_level == DamageLevel.MODERATE
-    assert merged.confidence == "medium"
+    merged = _apply_review_overrides([a], [b])
+    assert len(merged) == 1
+    assert merged[0].status == Status.DAMAGED
+    assert merged[0].damage_level == DamageLevel.MODERATE
+    assert merged[0].confidence == "medium"
 
 
-def test_merge_two_states_missing_wins():
+def test_apply_review_overrides_missing_wins():
     a = PartActualState(
         part_id="mirror_left",
         part_name="左后视镜",
@@ -49,8 +50,8 @@ def test_merge_two_states_missing_wins():
         damage_level=DamageLevel.SEVERE,
         confidence="medium",
     )
-    merged = _merge_two_states(a, b)
-    assert merged.status == Status.MISSING
+    merged = _apply_review_overrides([a], [b])
+    assert merged[0].status == Status.MISSING
 
 
 @pytest.mark.asyncio
@@ -71,54 +72,47 @@ async def test_assessment_orchestrator_integration():
         "key_anchors": {},
     }
     fake_plan = {
-        "photo_views": [
-            {"photo_id": "a.png", "view_id": "front", "confidence": "high", "reason": ""},
-            {"photo_id": "b.png", "view_id": "rear", "confidence": "high", "reason": ""},
-            {"photo_id": "c.png", "view_id": "interior", "confidence": "high", "reason": ""},
+        "photo_classifications": [
+            {"photo_id": "a.png", "category": "exterior", "confidence": "high"},
+            {"photo_id": "b.png", "category": "exterior", "confidence": "high"},
+            {"photo_id": "c.png", "category": "interior", "confidence": "high"},
         ],
-        "view_groups": {
-            "front": [{"id": "a.png", "path": "/a.png"}],
-            "rear": [{"id": "b.png", "path": "/b.png"}],
-            "interior": [{"id": "c.png", "path": "/c.png"}],
-        },
-        "coverage_gaps": [],
-        "workflow_plan": {},
     }
-    fake_vision_front = {
-        "view_id": "front",
-        "regions": ["front"],
-        "parts": [],
-        "part_actual_states": [
-            PartActualState(
-                part_id="hood",
-                part_name="引擎盖",
-                part_category="front",
-                side="center",
-                status=Status.INTACT,
-                damage_level=DamageLevel.NONE,
-                confidence="high",
-                evidence_photos=["a.png"],
-            )
+    fake_view_a = {
+        "photo_id": "a.png",
+        "primary_view": "front",
+        "view_detections": [{"view_id": "front", "confidence_score": 0.9, "is_primary": True}],
+        "parts": [
+            {
+                "part_id": "hood",
+                "part_name": "引擎盖",
+                "status": "intact",
+                "damage_level": "none",
+                "damage_types": ["none"],
+                "model_confidence_score": 0.9,
+                "confidence": "high",
+                "description": "引擎盖平整无损伤",
+                "evidence_photo": "a.png",
+            },
         ],
-        "uncertain_items": [],
     }
-    fake_vision_rear = {
-        "view_id": "rear",
-        "regions": ["rear"],
-        "parts": [],
-        "part_actual_states": [
-            PartActualState(
-                part_id="trunk_lid",
-                part_name="后备箱盖",
-                part_category="rear",
-                side="center",
-                status=Status.DAMAGED,
-                damage_level=DamageLevel.SEVERE,
-                confidence="high",
-                evidence_photos=["b.png"],
-            )
+    fake_view_b = {
+        "photo_id": "b.png",
+        "primary_view": "rear",
+        "view_detections": [{"view_id": "rear", "confidence_score": 0.9, "is_primary": True}],
+        "parts": [
+            {
+                "part_id": "trunk_lid",
+                "part_name": "后备箱盖",
+                "status": "damaged",
+                "damage_level": "severe",
+                "damage_types": ["deformation"],
+                "model_confidence_score": 0.9,
+                "confidence": "high",
+                "description": "后备箱盖严重变形",
+                "evidence_photo": "b.png",
+            },
         ],
-        "uncertain_items": [],
     }
     fake_review = {
         "reviewed_parts": [],
@@ -128,8 +122,8 @@ async def test_assessment_orchestrator_integration():
         "summary": "OK",
     }
 
-    with patch("agents.assessment_orchestrator.vehicle_prior_agent", new=AsyncMock(return_value=fake_prior)):
-        with patch("agents.assessment_orchestrator.build_vehicle_topology") as mock_topology:
+    with patch("agents.master_agent.vehicle_prior_agent", new=AsyncMock(return_value=fake_prior)):
+        with patch("agents.master_agent.build_vehicle_topology") as mock_topology:
             from models.topology import TopologyNode, VehicleTopology
             topology = VehicleTopology(
                 vehicle_id="test",
@@ -157,9 +151,9 @@ async def test_assessment_orchestrator_integration():
                 regions={"front": ["hood"], "rear": ["trunk_lid"]},
             )
             mock_topology.return_value = topology
-            with patch("agents.assessment_orchestrator.planner_agent", new=AsyncMock(return_value=fake_plan)):
-                with patch("agents.assessment_orchestrator.vision_subagent", new=AsyncMock(side_effect=[fake_vision_front, fake_vision_rear])):
-                    with patch("agents.assessment_orchestrator.reviewer_subagent", new=AsyncMock(return_value=fake_review)):
+            with patch("agents.master_agent.planner_agent", new=AsyncMock(return_value=fake_plan)):
+                with patch("agents.master_agent.view_agent", new=AsyncMock(side_effect=[fake_view_a, fake_view_b])):
+                    with patch("agents.master_agent.reviewer_subagent", new=AsyncMock(return_value=fake_review)):
                         result = await assessment_orchestrator(files, vehicle_info)
 
     assert "parts" in result

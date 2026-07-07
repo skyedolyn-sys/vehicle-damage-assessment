@@ -43,19 +43,16 @@ def test_vision_system_prompt_renders():
     assert '"view_id": "front_left_45"' in rendered
 
 
-def test_planner_system_prompt_matches_legacy():
-    from agents.planner_agent import _build_system_prompt
-
+def test_view_agent_prompt_renders():
     rendered = render_prompt_template(
-        "planner_system_prompt",
-        view_selection_prompt=get_view_selection_prompt(),
-        vehicle_name="该车",
+        "view_agent_prompt",
+        photo_id="p1",
+        vehicle_name="TestCar",
     )
-    # Template has evolved beyond the legacy prompt; verify it renders
-    # with expected content rather than exact string equality.
     assert rendered
-    assert "photo_views" in rendered
-    assert "view_id" in rendered
+    assert "输出 JSON Schema" in rendered
+    assert "front_left" in rendered
+    assert "hood" in rendered
 
 
 def test_vision_system_prompt_matches_legacy():
