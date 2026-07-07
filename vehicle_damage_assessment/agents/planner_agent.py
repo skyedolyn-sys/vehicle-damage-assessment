@@ -48,7 +48,7 @@ from agents.view_mapping import (
     is_exterior_view,
     normalize_view_id,
 )
-from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
+from config import IMAGE_MAX_WIDTH, PARTS_BY_ID, MAX_CONCURRENT_API_CALLS
 
 
 #: Thumbnail width used by the planner.  Smaller images reduce cost/latency
@@ -59,7 +59,7 @@ _PLANNER_THUMB_WIDTH = 384
 #: 每批发送给 LLM 的最大照片数。
 #: 经验上，8 张一批时 batch 独立判断容易系统性左右翻转（172852 回归）。
 #: 16 张一批让单批包含更多全局上下文，左右稳定性显著提升，同时 32 张照片
-#: 仍只需 2 批，不会超出 max_tokens=8000。
+#: 仍只需 2 批，max_tokens=16000 给 thinking + 16 个 entry JSON 留出空间。
 _PLANNER_BATCH_SIZE = 16
 
 
@@ -609,36 +609,168 @@ def _decode_image_dimensions(photo: Dict[str, Any]) -> Tuple[int, int]:
         return 0, 0
 
 
+def _load_photo_classification_prompt() -> str:
+    """Load the photo classification prompt from the rules config.
+
+    Falls back to a minimal inline prompt if the config file is missing so the
+    planner still works in degraded environments (and unit tests do not need
+    the rules package initialised).
+    """
+    try:
+        from pathlib import Path
+
+        prompt_path = (
+            Path(__file__).resolve().parent / "rules" / "config" / "photo_classification_prompt.txt"
+        )
+        return prompt_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        logger.warning("[planner] failed to load photo_classification_prompt.txt: %s", exc)
+        return (
+            "你是一个车辆损伤评估场景的图像分类专家。请把每张照片分到 4 类之一: "
+            "exterior / interior / vehicle_info / exclude。"
+            "输出 JSON: {\"photo_id\": \"...\", \"classification\": \"...\", "
+            "\"has_position_info\": true/false, \"confidence\": \"high/medium/low\", "
+            "\"reasoning\": \"...\"}"
+        )
+
+
+async def _classify_photo_by_llm(
+    photo: Dict[str, Any],
+    system_prompt: str,
+) -> str:
+    """Classify one photo via a single LLM call. Returns one of:
+    ``exterior``, ``interior``, ``vehicle_info``, ``exclude``, or the fallback
+    ``exterior`` on parse failure.
+
+    Designed to be called concurrently with ``asyncio.gather``.
+    """
+    from agents.minimax_client import call_minimax, build_image_content
+
+    photo_id = photo.get("id", "")
+    path = photo.get("path") or photo.get("url", "")
+    if not path:
+        logger.warning("[planner] photo %s has no path/url, fallback to exterior", photo_id)
+        return "exterior"
+
+    user_content: List[Dict[str, Any]] = [
+        {"type": "text", "text": f"请分析照片编号: {photo_id}"},
+    ]
+    try:
+        user_content.append(build_image_content(path, max_width=IMAGE_MAX_WIDTH))
+    except Exception as exc:
+        logger.warning("[planner] failed to build image content for %s: %s", photo_id, exc)
+        return "exterior"
+
+    messages = [{"role": "user", "content": [{"type": "text", "text": system_prompt}, *user_content]}]
+
+    raw = ""
+    for attempt in range(1, 4):
+        try:
+            raw = await call_minimax(
+                messages,
+                temperature=0.0,
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+            )
+            break
+        except Exception as exc:
+            logger.warning(
+                "[planner] classify attempt %d for %s failed: %s", attempt, photo_id, exc,
+            )
+            if attempt == 3:
+                return "exterior"
+
+    classification = _parse_classification_response(raw, photo_id)
+    logger.info("[planner] photo %s LLM classification: %s", photo_id, classification)
+    return classification
+
+
+def _parse_classification_response(raw: str, photo_id: str) -> str:
+    """Extract a canonical classification string from the LLM's JSON output.
+
+    Falls back to ``exterior`` if the response is malformed or the value is
+    not one of the four known categories.  We deliberately default to
+    ``exterior`` rather than ``exclude`` because a parse failure should not
+    silently drop a potentially-useful photo.
+    """
+    if not raw:
+        return "exterior"
+    try:
+        data = extract_json(raw)
+        if isinstance(data, dict):
+            value = data.get("classification", "")
+            if isinstance(value, str):
+                value = value.strip().lower()
+                if value in {"exterior", "interior", "vehicle_info", "exclude"}:
+                    return value
+    except Exception:
+        pass
+    logger.warning(
+        "[planner] classify response for %s not parseable as canonical class; raw=%s",
+        photo_id, (raw or "")[:200],
+    )
+    return "exterior"
+
+
 async def _classify_photo_types(
     photos: List[Dict[str, Any]],
     vehicle_prior: Dict[str, Any],
 ) -> Dict[str, str]:
-    """确定性 photo_type 分类:不再调用 LLM(DAMAGE_RECOGNITION_POLICY §1.6)。
+    """Classify every photo into one of exterior / interior / vehicle_info / exclude.
 
-    - 文件名有 keyword(auxiliary/interior)→ 强制结论
-    - 长宽比极端(portrait/landscape)且无明确辅助关键词 → close_up_damage
-    - 默认 → exterior
+    Two-tier strategy:
 
-    原 LLM 路径存在 3 个问题:(1) 经常 parse 失败(详见 minimax_client.py 改造);
-    (2) LLM 倾向把"看不清局部"误判为 auxiliary; (3) 26% 全局失败率的主要源头之一。
-    现完全去除 LLM 调用,引入图片宽高作为唯一额外信号。
+    1. Filename keyword pre-classify (free, deterministic): any photo whose
+       filename matches the well-known auxiliary / interior keywords is
+       short-circuited and never sent to the LLM. This protects the existing
+       cheap path for obviously-non-exterior photos.
+
+    2. Parallel LLM single-shot classification: every remaining photo is sent
+       to MiniMax with the v4 photo-classification prompt, all calls dispatched
+       via ``asyncio.gather`` with a small concurrency cap.  Each call returns
+       one of the four categories; failures fall back to ``exterior``.
+
+    Replaces the previous deterministic-only classifier (filename + aspect
+    ratio).  See agents/rules/config/photo_classification_prompt.txt for the
+    full prompt and the validation history (172852: 32/32, 167111: 12/12).
     """
     type_map: Dict[str, str] = {}
-    # 批量注入一次宽高,避免每个 photo 重复打开图片
-    for photo in photos:
-        if "_decoded_width" not in photo:
-            w, h = _decode_image_dimensions(photo)
-            photo["_decoded_width"] = w
-            photo["_decoded_height"] = h
+    pending: List[Dict[str, Any]] = []
+
+    # Tier 1: filename pre-classify. Keep the existing keyword list intact.
     for photo in photos:
         photo_id = photo.get("id", "")
         if not photo_id:
             continue
-        photo_type = _classify_photo_by_signals(photo)
-        type_map[photo_id] = photo_type
-        logger.info("[planner] photo %s classified deterministically as %s", photo_id, photo_type)
+        by_name = _classify_photo_by_filename(photo_id)
+        if by_name:
+            type_map[photo_id] = by_name
+            logger.info("[planner] photo %s classified by filename as %s", photo_id, by_name)
+        else:
+            pending.append(photo)
 
-    logger.info("[planner] deterministic classify done: %s", type_map)
+    # Tier 2: parallel LLM single-shot classification.
+    if pending:
+        system_prompt = _load_photo_classification_prompt()
+        sem = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+
+        async def _gated(photo: Dict[str, Any]) -> Tuple[str, str]:
+            async with sem:
+                return photo.get("id", ""), await _classify_photo_by_llm(photo, system_prompt)
+
+        results = await asyncio.gather(
+            *[_gated(p) for p in pending],
+            return_exceptions=True,
+        )
+        for res in results:
+            if isinstance(res, Exception):
+                logger.warning("[planner] classify gather raised: %s", res)
+                continue
+            pid, cls = res
+            if pid:
+                type_map[pid] = cls
+
+    logger.info("[planner] classify done: %s", type_map)
     return type_map
 
 
@@ -667,7 +799,7 @@ def _stabilize_plan(
         view_id = entry.get("view_id", "scene_intake")
         photo_type = photo_types.get(photo_id, "")
         planner_confidence = entry.get("confidence", "low")
-        if photo_type in ("interior", "auxiliary"):
+        if photo_type in ("interior", "auxiliary", "exclude"):
             view_id = photo_type
         elif photo_type in ("close_up_damage", "close_up_detail"):
             # Preserve the planner's exterior assignment; fall back to scene_intake
@@ -688,6 +820,59 @@ def _stabilize_plan(
 
     # Build view_groups with exterior photos only, sorted by confidence.
     groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
+
+    # view-id fallback: when the LLM gave an unknown/empty view_id for an
+    # exterior-classified photo (filename pre-resolve also failed), the photo
+    # would otherwise be dropped into ``groups["unknown"]`` and never reach a
+    # vision subagent.  Round-robin those photos across the canonical exterior
+    # views by filename index so every exterior photo has a home.
+    exterior_rotation_views = [
+        "front_left_45", "front_right_45",
+        "rear_left_45", "rear_right_45",
+        "left_90", "right_90", "top",
+    ]
+    fallback_pool: List[str] = []  # photo_ids needing view assignment
+    for entry in stabilized:
+        photo_id = entry.get("photo_id", "")
+        if not photo_id:
+            continue
+        if photo_types.get(photo_id, "") != "exterior":
+            continue
+        view_id = entry.get("view_id", "unknown")
+        if view_id in EXTERIOR_VIEWS:
+            continue
+        fallback_pool.append(photo_id)
+
+    # Sort by trailing numeric index in photo_id (e.g. "172852-30.png" → 30)
+    # so the round-robin order is stable and reproducible across runs.
+    def _photo_index(pid: str) -> int:
+        stem = pid.split(".", 1)[0]
+        match = re.search(r"(\d+)(?=\D*$)", stem)
+        return int(match.group(1)) if match else 9999
+
+    fallback_pool.sort(key=_photo_index)
+
+    rotation_assignment: Dict[str, str] = {}
+    for idx, pid in enumerate(fallback_pool):
+        rotation_assignment[pid] = exterior_rotation_views[idx % len(exterior_rotation_views)]
+
+    if rotation_assignment:
+        logger.info(
+            "[planner] view-id fallback: rotating %d exterior-classified photos with unknown view across %s",
+            len(rotation_assignment), exterior_rotation_views,
+        )
+        for entry in stabilized:
+            pid = entry.get("photo_id", "")
+            if pid in rotation_assignment:
+                entry["view_id"] = rotation_assignment[pid]
+                entry["confidence"] = "low"
+                existing_reason = entry.get("reason", "")
+                entry["reason"] = (
+                    f"{existing_reason} [view-id fallback: rotated to {rotation_assignment[pid]}]"
+                    if existing_reason
+                    else f"view-id fallback: rotated to {rotation_assignment[pid]}"
+                )
+
     for entry in stabilized:
         view_id = entry.get("view_id", "unknown")
         photo_id = entry.get("photo_id", "")
@@ -867,11 +1052,10 @@ async def planner_agent(
         photo_views = list(pre_resolved_views)
     else:
         # Split photos into batches of _PLANNER_BATCH_SIZE and dispatch in
-        # parallel.  With 32 photos at batch_size=8 we get 4 LLM calls
-        # (each producing ~150-300 tokens of view labels + JSON), which is
-        # well under max_tokens=8000 and avoids the "thinking consumes all
-        # the budget, JSON never gets emitted" failure mode we hit when
-        # shoving all 32 into one prompt.
+        # parallel.  With 32 photos at batch_size=16 we get 2 LLM calls
+        # (each producing ~150-300 tokens of view labels + JSON). max_tokens=16000
+        # gives the model's thinking + JSON envelope enough room; previously
+        # max_tokens=8000 left batch 2's 33k-char thinking to truncate JSON.
         n_batches = (len(photos) + _PLANNER_BATCH_SIZE - 1) // _PLANNER_BATCH_SIZE
         logger.info(
             "[planner] dispatching %d photos to LLM in %d parallel batches of %d",
@@ -926,7 +1110,7 @@ async def planner_agent(
                         call_minimax(
                             messages,
                             temperature=0.0,
-                            max_tokens=8000,
+                            max_tokens=16000,
                             response_format={"type": "json_object"},
                         ),
                         timeout=_PLANNER_BATCH_TIMEOUT_SEC,
@@ -1101,7 +1285,7 @@ async def planner_agent(
             remaining_exterior = [
                 p for p in photos
                 if p.get("id") and p.get("id") not in seen_ids
-                and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "scene_intake")
+                and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "exclude", "scene_intake")
             ]
             if remaining_exterior:
                 corner_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45"]
@@ -1128,7 +1312,7 @@ async def planner_agent(
         remaining_photos = [
             p for p in photos
             if p.get("id") and p.get("id") not in seen_ids
-            and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "scene_intake")
+            and photo_types.get(p.get("id", ""), "") not in ("interior", "auxiliary", "exclude", "scene_intake")
         ]
         target_views = ["front_left_45", "front_right_45", "rear_left_45", "rear_right_45", "left_90", "right_90"]
         existing_idx = len(target_views)
@@ -1298,9 +1482,9 @@ def _augment_exterior_coverage(
         pid = photo.get("id", "")
         if not pid:
             continue
-        # Skip only clearly non-exterior photos (interior / auxiliary / scene_intake)
+        # Skip only clearly non-exterior photos (interior / auxiliary / exclude / scene_intake)
         photo_type = photo_types.get(pid, "")
-        if photo_type and photo_type in ("interior", "auxiliary", "scene_intake"):
+        if photo_type and photo_type in ("interior", "auxiliary", "exclude", "scene_intake"):
             continue
         if pid not in in_target_ids:
             rotation_pool.append(photo)
@@ -1549,7 +1733,7 @@ def _redistribute_scene_intake_closeups(
     eligible_ids: List[str] = []
     for pid in scene_intake_ids:
         photo_type = photo_types.get(pid, "unknown")
-        if photo_type not in ("interior", "auxiliary"):
+        if photo_type not in ("interior", "auxiliary", "exclude"):
             eligible_ids.append(pid)
 
     if not eligible_ids:
