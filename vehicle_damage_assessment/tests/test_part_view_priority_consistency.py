@@ -14,7 +14,7 @@ only.
 """
 
 from agents.rules import load_part_view_priority, load_view_weights
-from agents.view_mapping import STANDARD_VIEWS
+from agents.view_mapping import EXTERIOR_VIEWS
 
 
 def _zero_priority_views(part_view_priority, part_id):
@@ -107,9 +107,9 @@ def test_view_weights_part_ids_subset_of_part_view_priority():
 
 
 def test_part_view_priority_keys_are_valid_views():
-    """Every view_id appearing in part_view_priority must be a STANDARD_VIEW."""
+    """Every view_id appearing in part_view_priority must be an EXTERIOR_VIEW."""
     ppp = load_part_view_priority()
-    standard = set(STANDARD_VIEWS)
+    standard = set(EXTERIOR_VIEWS)
 
     bad = []
     for part_id, priorities in ppp.items():

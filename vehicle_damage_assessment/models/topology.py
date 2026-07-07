@@ -31,6 +31,9 @@ class TopologyNode:
     key_anchors: List[str] = field(default_factory=list)
     visibility_from: List[str] = field(default_factory=list)
 
+    # Whether this part is expected to exist on this specific vehicle
+    standard_exists: bool = True
+
 
 @dataclass
 class VehicleTopology:
@@ -80,6 +83,7 @@ class VehicleTopology:
                     "standard_features": list(n.standard_features),
                     "key_anchors": list(n.key_anchors),
                     "visibility_from": list(n.visibility_from),
+                    "standard_exists": n.standard_exists,
                 }
                 for nid, n in self.nodes.items()
             },
@@ -105,6 +109,7 @@ class VehicleTopology:
                 standard_features=list(n.get("standard_features", [])),
                 key_anchors=list(n.get("key_anchors", [])),
                 visibility_from=list(n.get("visibility_from", [])),
+                standard_exists=n.get("standard_exists", True),
             )
             for nid, n in data.get("nodes", {}).items()
         }

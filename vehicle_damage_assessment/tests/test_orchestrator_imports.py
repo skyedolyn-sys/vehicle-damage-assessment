@@ -1,8 +1,14 @@
 """orchestrator import 卫生: 验证无重复 import, 无未使用 import。"""
 import ast
+import sys
 from pathlib import Path
 
-ORCH_PATH = Path("/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/assessment_orchestrator.py")
+# Resolve ORCH_PATH relative to this test file so the test works in any
+# worktree or environment, not just /Users/sky/vehicle_damage_assessment.
+_ORCH_PATH = Path(__file__).resolve().parents[1] / "agents" / "assessment_orchestrator.py"
+ORCH_PATH = _ORCH_PATH if _ORCH_PATH.exists() else Path(
+    "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment/agents/assessment_orchestrator.py"
+)
 
 
 def test_no_duplicate_imports():
@@ -20,6 +26,4 @@ def test_no_duplicate_imports():
 
 def test_orchestrator_module_loads():
     """orchestrator 模块能成功 import。"""
-    import sys
-    sys.path.insert(0, "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment")
     from agents import assessment_orchestrator  # noqa: F401

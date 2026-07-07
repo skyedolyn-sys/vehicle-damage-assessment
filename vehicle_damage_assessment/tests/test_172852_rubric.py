@@ -24,12 +24,9 @@
 """
 import asyncio
 import os
-import sys
 from collections import Counter
 
 import pytest
-
-sys.path.insert(0, "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment")
 
 from agents import assessment_orchestrator
 

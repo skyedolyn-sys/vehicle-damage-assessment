@@ -1,7 +1,9 @@
 """Backward-compatibility tests for the rules package.
 
-Phase 1 guarantees that existing imports and behavior remain unchanged.
-These tests verify that guarantee.
+These tests verify that rules-loaded data remains consistent with the
+consuming agent modules.  Some legacy planner constants have been removed
+because the planner no longer assigns views; only the deterministic
+classification logic remains.
 """
 
 from agents.rules import (
@@ -38,12 +40,6 @@ def test_legacy_synthesizer_imports_still_work():
 def test_legacy_vision_imports_still_work():
     from agents.vision_subagent import _PART_ID_ALIASES
     assert _PART_ID_ALIASES["left_headlight"] == "headlight_front_left"
-
-
-def test_legacy_planner_imports_still_work():
-    from agents.planner_agent import _CONFIDENCE_ORDER, _FILENAME_VIEW_HINTS
-    assert _CONFIDENCE_ORDER["high"] > _CONFIDENCE_ORDER["low"]
-    assert any(pattern == "行驶证" and view_id == "auxiliary" for pattern, view_id in _FILENAME_VIEW_HINTS)
 
 
 def test_yaml_defaults_match_legacy_constants():
@@ -102,13 +98,8 @@ def test_filename_heuristics_match_legacy():
 
 
 def test_region_units_match_legacy():
-    from agents.synthesizer import REGION_UNITS
-    assert load_region_units() == REGION_UNITS
-
-
-def test_filename_view_hints_match_legacy():
-    from agents.planner_agent import _FILENAME_VIEW_HINTS
-    assert load_filename_view_hints() == _FILENAME_VIEW_HINTS
+    from agents.topology_comparator import _REGION_UNITS
+    assert load_region_units() == _REGION_UNITS
 
 
 def test_rendered_templates_are_non_empty_and_contain_expected_content():
@@ -117,22 +108,11 @@ def test_rendered_templates_are_non_empty_and_contain_expected_content():
     from agents.rules import render_prompt_template
 
     rendered = render_prompt_template(
-        "planner_system_prompt",
-        view_selection_prompt=get_view_selection_prompt(),
+        "view_agent_prompt",
+        photo_id="p1",
         vehicle_name="该车",
     )
     assert rendered
-    assert "photo_views" in rendered
-    assert "view_id" in rendered
-    assert "coverage_gaps" in rendered
-
-    rendered = render_prompt_template(
-        "vision_system_prompt",
-        view_id="front_left_45",
-        view_display_name="车头左前45度",
-        checklist_text="1. hood（引擎盖）",
-        vehicle_name="该车",
-    )
-    assert rendered
-    assert "front_left_45" in rendered
+    assert "输出 JSON Schema" in rendered
+    assert "front_left" in rendered
     assert "hood" in rendered

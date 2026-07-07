@@ -25,11 +25,8 @@
 import asyncio
 import os
 import re
-import sys
 
 import pytest
-
-sys.path.insert(0, "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment")
 
 from agents import assessment_orchestrator
 
@@ -82,11 +79,17 @@ def test_dp3_deterministic_no_llm():
 
 
 def test_dp4_filename_priority():
-    """DP-4: planner 应该使用 filename hint 优先解析。"""
-    from agents.planner_agent import _pre_resolve_views_from_filename
-    assert callable(_pre_resolve_views_from_filename), (
-        "DP-4 violation: _pre_resolve_views_from_filename not defined"
+    """DP-4: planner should classify photos deterministically using filename + image signals."""
+    from agents.planner_agent import _classify_by_filename, _classify_by_signals
+    assert callable(_classify_by_filename), (
+        "DP-4 violation: _classify_by_filename not defined"
     )
+    assert callable(_classify_by_signals), (
+        "DP-4 violation: _classify_by_signals not defined"
+    )
+    # VIN/行驶证 photos must route to vehicle_info, not exterior.
+    assert _classify_by_filename("行驶证.png") == "vehicle_info"
+    assert _classify_by_filename("vin_plate.png") == "vehicle_info"
 
 
 def test_dp8_reviewer_deterministic():

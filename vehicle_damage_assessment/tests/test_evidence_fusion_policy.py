@@ -5,9 +5,6 @@
 2. high-conf primary intact dominate 低置信度 light 信号(非高敏感)
 3. high-sensitivity severe 即使面对 high-conf primary intact 也必须穿透
 """
-import sys
-sys.path.insert(0, "/Users/sky/vehicle_damage_assessment/vehicle_damage_assessment")
-
 from agents.evidence_fusion import apply_fusion
 
 

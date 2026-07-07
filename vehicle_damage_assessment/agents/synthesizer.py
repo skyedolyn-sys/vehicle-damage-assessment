@@ -218,14 +218,14 @@ def _resolve_status_roof(candidates: List[Dict[str, Any]]) -> str:
         if is_sunroof and primary_damaged and not primary_intact:
             return "damaged"
         # If at least one primary view says intact, normally prefer intact.
-        # However, for roof_front a front-corner view (front_left_45/
-        # front_right_45) showing severe structural damage at the A-pillar/roof
+        # However, for roof_front a front-corner view (front_left/
+        # front_right) showing severe structural damage at the A-pillar/roof
         # rail junction is more reliable than a distant top view that may only
         # see the flat panel surface. In that case trust the corner view.
         if primary_intact:
             corner_severe = [
                 c for c in secondary
-                if canonicalize_view_id(c.get("_region", "")) in ("front_left_45", "front_right_45")
+                if canonicalize_view_id(c.get("_region", "")) in ("front_left", "front_right")
                 and c.get("status") == "damaged"
                 and c.get("damage_level") == "severe"
             ]
@@ -307,7 +307,7 @@ def _resolve_damage_level_roof(
         if part_id == "roof_front" and base == "severe":
             corner_severe = [
                 c for c in secondary_damaged
-                if canonicalize_view_id(c.get("_region", "")) in ("front_left_45", "front_right_45")
+                if canonicalize_view_id(c.get("_region", "")) in ("front_left", "front_right")
                 and c.get("damage_level") == "severe"
             ]
             if corner_severe:
