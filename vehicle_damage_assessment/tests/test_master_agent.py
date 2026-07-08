@@ -92,22 +92,24 @@ def test_aggregate_part_evidence_conflict_detected():
     view_results = [
         {
             "photo_id": "p1",
-            "primary_view": "front",
+            "primary_view": "front_left",
             "parts": [
                 {"part_id": "hood", "status": "intact", "damage_level": "none", "damage_types": ["none"], "confidence": "high", "description": "平整"},
             ],
         },
         {
             "photo_id": "p2",
-            "primary_view": "front_left",
+            "primary_view": "rear",
             "parts": [
                 {"part_id": "hood", "status": "damaged", "damage_level": "moderate", "damage_types": ["dent"], "confidence": "high", "description": "凹陷"},
             ],
         },
     ]
     evidence = _aggregate_part_evidence(view_results)
+    # Neither primary strong intact nor primary strong damaged; consensus
+    # is uncertain and conflicting is True.
     assert evidence["hood"]["conflicting"] is True
-    assert evidence["hood"]["aggregated_status"] == "damaged"
+    assert evidence["hood"]["aggregated_status"] == "uncertain"
 
 
 def test_boost_confidence_schema():

@@ -193,15 +193,45 @@ class TopologyConsistencyEnforcer:
         """Force unified conclusions within physically connected region units.
 
         Worst status wins, but damaged overrides missing when both are present.
+
+        DAMAGE_RECOGNITION_POLICY §4.3 guardrail:
+        - Skip units with fewer than two members (no consensus possible).
+        - For pairs, BOTH members must independently confirm damage at
+          >= medium confidence before the unified conclusion overrides
+          intact siblings.
+        - For larger units, require >= 2/3 super-majority of strong
+          evidence to apply unification.
+        - An intact primary-view observation always beats a damaged
+          secondary-view observation when consensus is below threshold.
         """
         result = dict(by_id)
         for unit_name, members in _REGION_UNITS.items():
             present = [result[m] for m in members if m in result]
-            if not present:
+            if len(present) < 2:
                 continue
 
             statuses = [p.status for p in present]
             levels = [p.damage_level for p in present]
+
+            # Skip unification when there are too few members to form a
+            # reliable majority.  Single-pair units (e.g. rear_unit with
+            # tailgate + windshield_rear) require BOTH sides to agree on
+            # damaged at >= medium confidence; otherwise a single damaged
+            # observation would corrupt its intact sibling.
+            if len(present) < 2:
+                continue
+            non_intact_with_evidence_count = sum(
+                1 for p in present
+                if p.status in (Status.DAMAGED, Status.MISSING)
+                and p.confidence in ("medium", "high")
+            )
+            if len(present) <= 2:
+                # Pair: both members must independently confirm damage.
+                threshold = len(present)
+            else:
+                threshold = max(1, int(len(present) * 2 / 3))
+            if non_intact_with_evidence_count < threshold:
+                continue
 
             unit_status = (
                 Status.DAMAGED

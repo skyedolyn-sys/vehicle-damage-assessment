@@ -1,8 +1,19 @@
 # Region units: physically connected groups of parts that should share a
 # unified conclusion in the synthesizer.
-default:
-  rear_unit:
-    - tailgate
-    - windshield_rear
+#
+# Guardrail: a unified conclusion must NEVER overwrite an intact observation
+# from a primary view of one member using a secondary/damaged observation of
+# another.  Without this rule, ViewAgent mistakes on one member silently
+# propagate to the other.
+#
+# 修复历史 (2026-07-08): 之前的 rear_unit 把 tailgate 与 windshield_rear 绑
+# 在一起,当 tailgate 被 ViewAgent 误判为 damaged 时,会把 intact 的
+# windshield_rear 一同传染成 damaged severe,触发 Rubric §3.1 误判。两个
+# 部件虽然物理上接近,但不属于同一受力结构,不应共享结论。
+#
+# 区域单元目前为空。如果未来需要,新增条目应满足:
+#   - 成员在车体上属于同一受力结构
+#   - 任何成员在 primary view 上 intact 时,该 intact 信号应有 veto 能力
+default: {}
 
 by_vehicle_type: {}

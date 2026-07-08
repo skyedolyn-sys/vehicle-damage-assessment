@@ -199,11 +199,58 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
         statuses = [o["status"] for o in entry["observations"]]
         levels = [o["damage_level"] for o in entry["observations"]]
         confidences = [o["confidence"] for o in entry["observations"]]
+        views = [o.get("view_id") for o in entry["observations"]]
 
-        # Conservative status aggregation
-        if "missing" in statuses:
+        # DAMAGE_RECOGNITION_POLICY §3.1 / §4.1: primary-view signals carry
+        # more authority than secondary views.  Count votes for damaged/missing
+        # restricted to primary-view observations; require at least 1 primary
+        # damaged (or ≥2 secondary damaged for low-risk parts) before
+        # accepting damage.  This prevents a single secondary-view damaged
+        # observation from dominating the aggregated status.
+        primary_views = _primary_views_for_part(part_id)
+        primary_strong_views = _primary_strong_views_for_part(part_id)
+        damaged_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "damaged"
+        )
+        missing_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "missing"
+        )
+        primary_strong_damaged_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "damaged"
+            and o.get("view_id") in primary_strong_views
+        )
+        primary_strong_intact_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "intact"
+            and o.get("view_id") in primary_strong_views
+        )
+        primary_intact_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "intact"
+            and o.get("view_id") in primary_views
+        )
+        primary_observations = sum(
+            1 for o in entry["observations"] if o.get("view_id") in primary_views
+        )
+
+        if missing_votes > 0:
             entry["aggregated_status"] = "missing"
-        elif "damaged" in statuses:
+        elif primary_strong_intact_votes >= 2 and primary_strong_damaged_votes == 0:
+            # §3.1: at least TWO independent strong-primary observations
+            # agree intact and no strong-primary damaged signal exists.
+            # A single strong-primary intact is not enough to override
+            # broader secondary damaged consensus.
+            entry["aggregated_status"] = "intact"
+        elif primary_strong_damaged_votes >= 1 and primary_strong_intact_votes < 2:
+            # Primary view says damaged — accept unless contradicted by
+            # strong-primary intact (handled above).
+            entry["aggregated_status"] = "damaged"
+        elif damaged_votes >= 2 and primary_intact_votes == 0 and primary_observations == 0:
+            # No primary observations but ≥2 damaged from secondary views —
+            # trust the consensus when primary view didn't reach the part.
             entry["aggregated_status"] = "damaged"
         elif all(s == "intact" for s in statuses):
             entry["aggregated_status"] = "intact"
@@ -231,6 +278,46 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             entry["conflicting"] = True
 
     return evidence
+
+
+_PRIMARY_VIEW_CACHE: Dict[str, set] = {}
+_PRIMARY_STRONG_VIEW_CACHE: Dict[str, set] = {}
+
+
+def _primary_views_for_part(part_id: str) -> set:
+    """Return the set of primary view ids (priority <= 1) for a given part.
+
+    Cached in a module-level dict because we query this on every part for
+    every assessment.
+    """
+    if part_id in _PRIMARY_VIEW_CACHE:
+        return _PRIMARY_VIEW_CACHE[part_id]
+    primary = _load_primary_views(part_id, threshold=1)
+    _PRIMARY_VIEW_CACHE[part_id] = primary
+    return primary
+
+
+def _primary_strong_views_for_part(part_id: str) -> set:
+    """Return the strict-primary view ids (priority == 0) for a given part."""
+    if part_id in _PRIMARY_STRONG_VIEW_CACHE:
+        return _PRIMARY_STRONG_VIEW_CACHE[part_id]
+    primary = _load_primary_views(part_id, threshold=0)
+    _PRIMARY_STRONG_VIEW_CACHE[part_id] = primary
+    return primary
+
+
+def _load_primary_views(part_id: str, threshold: int) -> set:
+    """Helper that loads the priority table once per part."""
+    try:
+        from agents.rules import load_part_view_priority
+        priority_table = load_part_view_priority()
+    except Exception:
+        priority_table = {}
+    return {
+        view_id
+        for view_id, pri in priority_table.get(part_id, {}).items()
+        if pri <= threshold
+    }
 
 
 def _boost_confidence(base: str, evidence_count: int) -> str:

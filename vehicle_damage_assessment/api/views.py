@@ -29,11 +29,13 @@ from agents import (
 from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
-    STANDARD_VIEWS,
     get_display_name,
     get_regions_for_view,
     is_exterior_view,
 )
+
+# All canonical view ids (exterior + non-exterior) used by legacy plan shape.
+ALL_VIEW_IDS = EXTERIOR_VIEWS | NON_EXTERIOR_VIEWS
 from api.models import UploadedPhoto, UploadedTask
 from config import MAX_CONCURRENT_API_CALLS, PHOTO_LOCATOR_BATCH_SIZE
 
@@ -67,7 +69,7 @@ def _parse_view_override(raw: str) -> Dict[str, str]:
         photo_id, view_id = pair.split(":", 1)
         photo_id = photo_id.strip()
         view_id = view_id.strip().lower()
-        if photo_id and view_id in STANDARD_VIEWS:
+        if photo_id and view_id in ALL_VIEW_IDS:
             mapping[photo_id] = view_id
     return mapping
 
@@ -98,7 +100,7 @@ def _build_plan_from_view_override(
         )
 
     # Build view_groups with exterior photos only.
-    groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
+    groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in EXTERIOR_VIEWS}
     for entry in photo_views:
         view_id = entry["view_id"]
         photo_id = entry["photo_id"]
@@ -265,6 +267,53 @@ def _error_stream(message: str) -> Generator[str, None, None]:
     yield _sse_event("error", {"message": message})
 
 
+def _coverage_summary_from_photo_classifications(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Compute a legacy-style coverage summary from the new 4-class plan."""
+    from agents.view_mapping import EXTERIOR_VIEWS, PHOTO_TYPE_CATEGORIES
+
+    classifications = plan.get("photo_classifications", []) or []
+    counts = {category: 0 for category in PHOTO_TYPE_CATEGORIES}
+    covered_views = set()
+    photo_count = len(classifications)
+
+    for entry in classifications:
+        category = entry.get("category", "unknown")
+        if category in counts:
+            counts[category] += 1
+        if category == "exterior":
+            covered_views.add(category)
+
+    # In the new architecture each exterior photo IS its own view.  The
+    # frontend expects a "covered_view_count" approximate to the number of
+    # exterior photos, which is what we have.
+    return {
+        "covered_view_count": counts.get("exterior", 0),
+        "exterior_view_count": len(EXTERIOR_VIEWS),
+        "photo_count": photo_count,
+        "category_counts": counts,
+        "missing_views": [
+            v for v in sorted(EXTERIOR_VIEWS) if v not in covered_views
+        ] or [],
+        "covered_views": sorted(covered_views),
+    }
+
+
+def _locations_from_photo_classifications(plan: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build a legacy-style locations list from photo_classifications."""
+    classifications = plan.get("photo_classifications", []) or []
+    locations: List[Dict[str, Any]] = []
+    for entry in classifications:
+        category = entry.get("category", "unknown")
+        locations.append({
+            "photo_id": entry.get("photo_id"),
+            "category": category,
+            "location": category,
+            "confidence": entry.get("confidence", "low"),
+            "reason": entry.get("reason", ""),
+        })
+    return locations
+
+
 def _part_state_to_dict(part_state: Any) -> Dict[str, Any]:
     """Serialize a PartActualState (or already-dict value) to a frontend dict.
 
@@ -362,7 +411,6 @@ async def _run_orchestrator_workflow(
 ) -> Generator[str, None, None]:
     """Async generator that yields SSE events from the orchestrator workflow."""
     from agents.output_validator import validate_and_enrich
-    from agents.planner_agent import get_coverage_summary, plan_to_location_map
 
     try:
         yield _sse_event(
@@ -395,17 +443,18 @@ async def _run_orchestrator_workflow(
             {
                 "step": 2,
                 "name": "视角规划",
-                "message": "Planner Agent 正在为所有照片分配标准视角...",
+                "message": "Planner Agent 正在为所有照片分配视角类别...",
             },
         )
         from agents.planner_agent import planner_agent
         if plan is None:
             plan = await planner_agent(files, vehicle_prior)
-        coverage_summary = get_coverage_summary(plan)
+        coverage_summary = _coverage_summary_from_photo_classifications(plan)
+        locations = _locations_from_photo_classifications(plan)
         yield _sse_event(
             "locations",
             {
-                "locations": list(plan_to_location_map(plan).values()),
+                "locations": locations,
                 "coverage_summary": coverage_summary,
             },
         )
@@ -415,7 +464,7 @@ async def _run_orchestrator_workflow(
             {
                 "step": 3,
                 "name": "视觉识别",
-                "message": f"正在并发派发 {coverage_summary['covered_view_count']} 个 Vision Subagent...",
+                "message": f"正在并发派发 {coverage_summary['covered_view_count']} 个 ViewAgent...",
             },
         )
 

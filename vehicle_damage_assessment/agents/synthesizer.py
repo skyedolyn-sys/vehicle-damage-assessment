@@ -698,8 +698,31 @@ def synthesizer_agent(
         part_ids_to_iterate = list(PARTS_BY_ID.keys())
 
     # First pass: resolve each part independently.
+    #
+    # Parts whose ``standard_exists`` is False (e.g. sedan without tailgate)
+    # must not be inferred — they do not exist on this specific vehicle, so
+    # any observation of them is by definition wrong.  Emit a NA state that
+    # downstream code can filter out of damaged/intact/uncertain lists.
     merged_parts: List[Dict[str, Any]] = []
     for part_id in part_ids_to_iterate:
+        node = topology.get_node(part_id) if topology is not None else None
+        if node is not None and not getattr(node, "standard_exists", True):
+            base_info = PARTS_BY_ID.get(part_id, {})
+            merged_parts.append({
+                "part_id": part_id,
+                "part_name": base_info.get("part_name", part_id),
+                "part_category": base_info.get("part_category", ""),
+                "side": base_info.get("side", ""),
+                "status": "na",
+                "damage_level": "none",
+                "damage_type": [],
+                "confidence": "low",
+                "evidence_photo": [],
+                "evidence_sources": [],
+                "notes": f"该车型无 {base_info.get('part_name', part_id)} 部件（例如双门/三门/特定车型）",
+            })
+            continue
+
         candidates = parts_by_id.get(part_id, [])
         base_info = PARTS_BY_ID.get(part_id, {})
 
