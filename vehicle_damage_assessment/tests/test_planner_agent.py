@@ -55,33 +55,35 @@ def test_classify_by_signals_standard_aspect_ratio():
 
 @pytest.mark.asyncio
 async def test_classify_photo_types_falls_back_when_llm_fails():
-    """When the LLM call errors, planner falls back to the deterministic
-    filename+aspect-ratio classifier so the pipeline never deadlocks.
+    """When the vision call errors on every photo, planner falls back to
+    the deterministic filename+aspect-ratio classifier so the pipeline
+    never deadlocks.
 
     The key behavioural change in this round: the planner DOES call the
-    LLM by default (4-class photo classification cannot work from
-    filenames alone, e.g. ``172852-01.png`` has no signal).  When the
-    LLM is unreachable, we fall back so a network blip does not break
-    the whole assessment.
+    vision model by default (4-class photo classification cannot work
+    from filenames alone, e.g. ``172852-01.png`` has no signal).  When
+    the vision endpoint is unreachable, we fall back so a network blip
+    does not break the whole assessment.
     """
-    from agents import minimax_client
+    from agents import mcp_client
     from agents.planner_agent import _normalize_category
 
-    original_call_minimax = minimax_client.call_minimax
-    minimax_client.call_minimax = lambda *args, **kwargs: (_ for _ in ()).throw(
-        RuntimeError("simulated LLM outage")
-    )
+    async def fake_understand_image(image_path, prompt, **kwargs):
+        raise RuntimeError("simulated vision outage")
+
+    original = mcp_client.understand_image
+    mcp_client.understand_image = fake_understand_image
     try:
         result = await _classify_photo_types(
             [
-                {"id": "172852-行驶证.png"},
-                {"id": "172852-车头.png"},
-                {"id": "172852-内饰.png"},
+                {"id": "172852-行驶证.png", "path": "/tmp/a.png"},
+                {"id": "172852-车头.png", "path": "/tmp/b.png"},
+                {"id": "172852-内饰.png", "path": "/tmp/c.png"},
             ],
             {"vehicle": "Test"},
         )
     finally:
-        minimax_client.call_minimax = original_call_minimax
+        mcp_client.understand_image = original
     # The fallback filename-based classifier should still route the
     # keyword-bearing filenames to the right categories.
     assert result["172852-行驶证.png"] == "vehicle_info"
@@ -90,37 +92,29 @@ async def test_classify_photo_types_falls_back_when_llm_fails():
 
 
 @pytest.mark.asyncio
-async def test_classify_photo_types_uses_llm_when_available():
-    """When the LLM succeeds, planner uses the LLM verdict — filename is ignored.
+async def test_classify_photo_types_uses_vision_when_available():
+    """When the vision model succeeds, planner uses its verdict — filename is ignored.
 
-    Simulate the LLM by returning a JSON payload that maps each photo
-    to a category.  A photo whose filename would route to ``vehicle_info``
-    by the keyword heuristic (e.g. ``行驶证.png``) should still be
-    classified as the LLM says, even when they disagree.
+    We simulate the ``understand_image`` call returning a JSON object.
+    A photo whose filename would route to ``vehicle_info`` by the keyword
+    heuristic (e.g. ``行驶证.png``) should still be classified as the
+    vision verdict says, even when they disagree.
     """
-    from agents import minimax_client
+    from agents import mcp_client
 
-    fake_response = (
-        '{"classifications": ['
-        '{"photo_id": "172852-01.png", "photo_type": "exterior", "reason": "车头外观照"},'
-        '{"photo_id": "172852-09.png", "photo_type": "interior", "reason": "驾驶舱照片"},'
-        '{"photo_id": "172852-13.png", "photo_type": "vehicle_info", "reason": "行驶证特写"}'
-        ']}'
-    )
+    responses = {
+        "/tmp/fake-01.png": '{"photo_id": "172852-01.png", "category": "exterior", "reason": "车头外观照"}',
+        "/tmp/fake-09.png": '{"photo_id": "172852-09.png", "category": "interior", "reason": "驾驶舱照片"}',
+        "/tmp/fake-13.png": '{"photo_id": "172852-13.png", "category": "vehicle_info", "reason": "行驶证特写"}',
+    }
 
-    original_call_minimax = minimax_client.call_minimax
-    original_build_image = minimax_client.build_image_content
+    async def fake_understand_image(image_path, prompt, **kwargs):
+        # The planner dispatches per-photo, so each call should carry
+        # exactly one image path.
+        return responses[image_path]
 
-    async def fake_call_minimax(messages, **kwargs):
-        return fake_response
-
-    def fake_build_image(path, max_width=None):
-        # Avoid reading the file; the test never actually invokes the
-        # network.  Return a stub content block.
-        return {"type": "image_url", "image_url": {"url": f"stub://{path}"}}
-
-    minimax_client.call_minimax = fake_call_minimax
-    minimax_client.build_image_content = fake_build_image
+    original = mcp_client.understand_image
+    mcp_client.understand_image = fake_understand_image
     try:
         result = await _classify_photo_types(
             [
@@ -131,10 +125,9 @@ async def test_classify_photo_types_uses_llm_when_available():
             {"vehicle": "Test"},
         )
     finally:
-        minimax_client.call_minimax = original_call_minimax
-        minimax_client.build_image_content = original_build_image
-    # Filenames like ``172852-XX.png`` carry no signal — only the LLM
-    # verdict should drive the result.
+        mcp_client.understand_image = original
+    # Filenames like ``172852-XX.png`` carry no signal — only the
+    # vision verdict should drive the result.
     assert result["172852-01.png"] == "exterior"
     assert result["172852-09.png"] == "interior"
     assert result["172852-13.png"] == "vehicle_info"
@@ -142,27 +135,27 @@ async def test_classify_photo_types_uses_llm_when_available():
 
 @pytest.mark.asyncio
 async def test_classify_photo_types_empty_when_no_photos():
-    """No photos → empty type_map (no LLM call needed)."""
-    from agents import minimax_client
+    """No photos → empty type_map (no vision call needed)."""
+    from agents import mcp_client
 
     called = {"n": 0}
 
-    async def tracking_call(messages, **kwargs):
+    async def tracking(image_path, prompt, **kwargs):
         called["n"] += 1
         return "{}"
 
-    original = minimax_client.call_minimax
-    minimax_client.call_minimax = tracking_call
+    original = mcp_client.understand_image
+    mcp_client.understand_image = tracking
     try:
         result = await _classify_photo_types([], {"vehicle": "Test"})
     finally:
-        minimax_client.call_minimax = original
+        mcp_client.understand_image = original
     assert result == {}
-    assert called["n"] == 0  # short-circuit before any LLM call
+    assert called["n"] == 0  # short-circuit before any vision call
 
 
 def test_normalize_category_aliases():
-    """The LLM may emit ``auxiliary`` but our enum is ``vehicle_info``."""
+    """The vision model may emit ``auxiliary`` but our enum is ``vehicle_info``."""
     from agents.planner_agent import _normalize_category
     assert _normalize_category("exterior") == "exterior"
     assert _normalize_category("interior") == "interior"
@@ -189,33 +182,24 @@ async def test_planner_agent_classifies_all_photos():
         {"id": "172852-现场.png", "path": "/tmp/d.png"},
     ]
 
-    from agents import minimax_client
+    from agents import mcp_client
 
-    fake_response = (
-        '{"classifications": ['
-        '{"photo_id": "172852-行驶证.png", "photo_type": "auxiliary", "reason": "证件照"},'
-        '{"photo_id": "172852-车头.png", "photo_type": "exterior", "reason": "车头照"},'
-        '{"photo_id": "172852-内饰.png", "photo_type": "interior", "reason": "驾驶舱"},'
-        '{"photo_id": "172852-现场.png", "photo_type": "scene_intake", "reason": "现场环境"}'
-        ']}'
-    )
+    responses = {
+        "/tmp/a.png": '{"photo_id": "172852-行驶证.png", "category": "auxiliary", "reason": "证件照"}',
+        "/tmp/b.png": '{"photo_id": "172852-车头.png", "category": "exterior", "reason": "车头照"}',
+        "/tmp/c.png": '{"photo_id": "172852-内饰.png", "category": "interior", "reason": "驾驶舱"}',
+        "/tmp/d.png": '{"photo_id": "172852-现场.png", "category": "scene_intake", "reason": "现场环境"}',
+    }
 
-    original_call_minimax = minimax_client.call_minimax
-    original_build_image = minimax_client.build_image_content
+    async def fake_understand_image(image_path, prompt, **kwargs):
+        return responses[image_path]
 
-    async def fake_call_minimax(messages, **kwargs):
-        return fake_response
-
-    def fake_build_image(path, max_width=None):
-        return {"type": "image_url", "image_url": {"url": f"stub://{path}"}}
-
-    minimax_client.call_minimax = fake_call_minimax
-    minimax_client.build_image_content = fake_build_image
+    original = mcp_client.understand_image
+    mcp_client.understand_image = fake_understand_image
     try:
         result = await planner_agent(photos, {"vehicle": "Test Car"})
     finally:
-        minimax_client.call_minimax = original_call_minimax
-        minimax_client.build_image_content = original_build_image
+        mcp_client.understand_image = original
 
     classifications = result["photo_classifications"]
     assert len(classifications) == 4

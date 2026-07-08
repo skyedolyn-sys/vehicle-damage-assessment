@@ -198,54 +198,120 @@ def _classify_deterministic(photos: List[Dict[str, Any]]) -> Dict[str, str]:
 
 
 async def _classify_with_llm(photos: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Call the LLM to do 4-class photo classification.
+    """Classify each photo into a 4-class category via the vision model.
 
-    MiniMax M3 emits long <think> blocks before any JSON.  When asked to
-    classify 32 photos at once, the thinking budget can exhaust
-    ``max_tokens`` before the final JSON appears, leaving us with text
-    that does not parse.  We therefore batch into small groups of
-    ``BATCH_SIZE`` photos and concatenate the per-batch results.
-
-    Each photo is sent as an image block so the model can see the
-    content.  Filenames like ``172852-01.png`` carry no semantic signal
-    so a filename-only heuristic would mis-classify every photo as
-    ``exterior`` (the default fallback).
+    Primary path: per-photo ``understand_image`` call (MCP tool when
+    configured, chat-completions image path otherwise).  Calling the
+    model once per photo avoids the long <think> blocks that broke the
+    earlier batched approach — the model has more thinking headroom
+    for a single image and the JSON it returns is small.
 
     Returns
     -------
     dict[photo_id, category]
-        Empty dict if the call errors or returns an unexpected shape;
-        callers should fall back to the deterministic classifier in
-        that case.
+        Empty dict if every call errors or returns an unexpected
+        shape; callers should fall back to the deterministic
+        classifier in that case.
     """
-    from agents.minimax_client import build_image_content, call_minimax, extract_json
+    from agents.mcp_client import understand_image
     from agents.rules import render_prompt_template
-    from config import IMAGE_MAX_WIDTH, MINIMAX_MODEL
 
     if not photos:
         return {}
 
-    # 4 photos per call fits within the model's thinking budget so the
-    # final JSON actually appears (instead of getting truncated mid-payload).
-    BATCH_SIZE = 4
-
     type_map: Dict[str, str] = {}
-    batches: List[List[Dict[str, Any]]] = [
-        photos[i : i + BATCH_SIZE] for i in range(0, len(photos), BATCH_SIZE)
-    ]
 
-    for batch_idx, batch in enumerate(batches):
-        batch_result = await _classify_one_batch(batch, batch_idx, len(batches))
-        type_map.update(batch_result)
+    for photo in photos:
+        path = photo.get("path") or photo.get("url")
+        photo_id = photo.get("id")
+        if not path or not photo_id:
+            continue
+
+        prompt = _build_classify_prompt(photo_id)
+        try:
+            raw_text = await understand_image(path, prompt)
+        except Exception as exc:
+            logger.warning("[planner] understand_image failed for %s: %s", photo_id, exc)
+            continue
+
+        raw = _parse_classify_response(raw_text)
+        category = raw.get("category") if isinstance(raw, dict) else None
+        category = _normalize_category(category) if category else None
+        if category:
+            type_map[photo_id] = category
+            logger.info("[planner] photo %s classified as %s (vision)", photo_id, category)
+        else:
+            logger.warning(
+                "[planner] photo %s vision response unparseable: %s",
+                photo_id, raw_text[:200],
+            )
 
     if not type_map:
         logger.warning(
-            "[planner] LLM classify returned empty type_map (all batches errored)"
+            "[planner] LLM classify returned empty type_map (all calls errored)"
         )
 
-    for pid, cat in type_map.items():
-        logger.info("[planner] photo %s classified as %s (llm)", pid, cat)
     return type_map
+
+
+def _build_classify_prompt(photo_id: str) -> str:
+    """Build the per-photo classification prompt.
+
+    Kept short on purpose: ``understand_image`` is a single-turn
+    tool call so the model should not have to spend tokens on
+    multi-photo bookkeeping.
+    """
+    return (
+        "判断这张车辆照片属于以下哪一类（仅输出一个 JSON 对象，不要 markdown、"
+        "不要 thinking）：\n"
+        "- exterior: 车身外部照片（车头/车尾/侧/45度角/车顶）\n"
+        "- interior: 车内照片（座椅/方向盘/仪表台/中控/后排）\n"
+        "- vehicle_info: 证件、行驶证、VIN 码、铭牌、车牌特写\n"
+        "- unknown: 其它或判断不了\n\n"
+        "输出格式："
+        '{"photo_id": "<photo_id>", "category": "<类别>", "reason": "<≤10 字理由>"}\n\n'
+        f"photo_id = {photo_id}"
+    )
+
+
+def _parse_classify_response(raw_text: str) -> Dict[str, Any]:
+    """Parse the vision response into a dict, tolerating extra prose.
+
+    The model occasionally wraps its answer with a sentence of
+    explanation.  We look for the first JSON object in the text and
+    return it; an empty dict is returned if no JSON is found.
+    """
+    import json
+    import re
+
+    if not raw_text:
+        return {}
+
+    # Try a direct parse first.
+    try:
+        parsed = json.loads(raw_text)
+        if isinstance(parsed, dict):
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Look for the first balanced JSON object in the text.
+    match = re.search(r"\{[^{}]*\}", raw_text)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+async def _classify_with_chat(photos: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Batched chat-completions path kept for the test suite and as
+    an explicit fallback.  The production path is now
+    :func:`_classify_with_llm` which uses one ``understand_image`` call
+    per photo.
+    """
 
 
 async def _classify_one_batch(
