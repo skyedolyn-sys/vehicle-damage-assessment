@@ -104,22 +104,24 @@ async def view_agent(
 
     image_content = build_image_content(photo.get("path") or photo.get("url"), max_width=IMAGE_MAX_WIDTH)
 
-    # Single user message that contains BOTH the image and the rule prompt.
-    # Putting the image and the rules in the same message gives M3-Vision a
-    # single coherent context to reason against (rather than splitting them
-    # across a long "system" role + a separate image-bearing "user" turn).
-    rules = render_prompt_template(
-        "view_agent_prompt",
+    # Two-role prompt architecture (per the team's SP separation rule):
+    # - system role: the view_agent SP (identity, methodology, output protocol)
+    # - user role: the task input (catalog, few-shot, vehicle name)
+    # The image lives in the user role because M3-Vision takes its cues from
+    # the same role as the rules, so the two must co-occur.
+    system_prompt = render_prompt_template("view_agent_system")
+    task_prompt = render_prompt_template(
+        "view_agent_task",
         photo_id=photo_id,
         vehicle_name=vehicle_name,
     )
-    user_text = f"{rules}\n\nFollow the rules above. Output JSON only — one object with camera_analysis, primary_view, view_detections, parts."
 
     messages = [
+        {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": user_text},
+                {"type": "text", "text": task_prompt},
                 image_content,
             ],
         },

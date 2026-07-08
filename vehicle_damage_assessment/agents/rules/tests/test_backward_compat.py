@@ -107,12 +107,16 @@ def test_rendered_templates_are_non_empty_and_contain_expected_content():
     from agents.view_mapping import get_view_selection_prompt
     from agents.rules import render_prompt_template
 
-    rendered = render_prompt_template(
-        "view_agent_prompt",
+    # ViewAgent SP and task templates
+    rendered_sp = render_prompt_template("view_agent_system")
+    assert rendered_sp
+    assert "相机坐标系" in rendered_sp
+
+    rendered_task = render_prompt_template(
+        "view_agent_task",
         photo_id="p1",
         vehicle_name="该车",
     )
-    assert rendered
-    assert "输出 JSON Schema" in rendered
-    assert "front_left" in rendered
-    assert "hood" in rendered
+    assert rendered_task
+    assert "front_right" in rendered_task
+    assert "hood" in rendered_task
