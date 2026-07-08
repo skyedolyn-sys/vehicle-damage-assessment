@@ -54,13 +54,22 @@ def test_classify_by_signals_standard_aspect_ratio():
 
 
 @pytest.mark.asyncio
-async def test_classify_photo_types_no_llm():
-    """Planner classification is deterministic and must not call any LLM."""
+async def test_classify_photo_types_falls_back_when_llm_fails():
+    """When the LLM call errors, planner falls back to the deterministic
+    filename+aspect-ratio classifier so the pipeline never deadlocks.
+
+    The key behavioural change in this round: the planner DOES call the
+    LLM by default (4-class photo classification cannot work from
+    filenames alone, e.g. ``172852-01.png`` has no signal).  When the
+    LLM is unreachable, we fall back so a network blip does not break
+    the whole assessment.
+    """
     from agents import minimax_client
+    from agents.planner_agent import _normalize_category
 
     original_call_minimax = minimax_client.call_minimax
     minimax_client.call_minimax = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("LLM was called - planner must not call LLM")
+        RuntimeError("simulated LLM outage")
     )
     try:
         result = await _classify_photo_types(
@@ -73,9 +82,96 @@ async def test_classify_photo_types_no_llm():
         )
     finally:
         minimax_client.call_minimax = original_call_minimax
+    # The fallback filename-based classifier should still route the
+    # keyword-bearing filenames to the right categories.
     assert result["172852-行驶证.png"] == "vehicle_info"
     assert result["172852-车头.png"] == "exterior"
     assert result["172852-内饰.png"] == "interior"
+
+
+@pytest.mark.asyncio
+async def test_classify_photo_types_uses_llm_when_available():
+    """When the LLM succeeds, planner uses the LLM verdict — filename is ignored.
+
+    Simulate the LLM by returning a JSON payload that maps each photo
+    to a category.  A photo whose filename would route to ``vehicle_info``
+    by the keyword heuristic (e.g. ``行驶证.png``) should still be
+    classified as the LLM says, even when they disagree.
+    """
+    from agents import minimax_client
+
+    fake_response = (
+        '{"classifications": ['
+        '{"photo_id": "172852-01.png", "photo_type": "exterior", "reason": "车头外观照"},'
+        '{"photo_id": "172852-09.png", "photo_type": "interior", "reason": "驾驶舱照片"},'
+        '{"photo_id": "172852-13.png", "photo_type": "vehicle_info", "reason": "行驶证特写"}'
+        ']}'
+    )
+
+    original_call_minimax = minimax_client.call_minimax
+    original_build_image = minimax_client.build_image_content
+
+    async def fake_call_minimax(messages, **kwargs):
+        return fake_response
+
+    def fake_build_image(path, max_width=None):
+        # Avoid reading the file; the test never actually invokes the
+        # network.  Return a stub content block.
+        return {"type": "image_url", "image_url": {"url": f"stub://{path}"}}
+
+    minimax_client.call_minimax = fake_call_minimax
+    minimax_client.build_image_content = fake_build_image
+    try:
+        result = await _classify_photo_types(
+            [
+                {"id": "172852-01.png", "path": "/tmp/fake-01.png"},
+                {"id": "172852-09.png", "path": "/tmp/fake-09.png"},
+                {"id": "172852-13.png", "path": "/tmp/fake-13.png"},
+            ],
+            {"vehicle": "Test"},
+        )
+    finally:
+        minimax_client.call_minimax = original_call_minimax
+        minimax_client.build_image_content = original_build_image
+    # Filenames like ``172852-XX.png`` carry no signal — only the LLM
+    # verdict should drive the result.
+    assert result["172852-01.png"] == "exterior"
+    assert result["172852-09.png"] == "interior"
+    assert result["172852-13.png"] == "vehicle_info"
+
+
+@pytest.mark.asyncio
+async def test_classify_photo_types_empty_when_no_photos():
+    """No photos → empty type_map (no LLM call needed)."""
+    from agents import minimax_client
+
+    called = {"n": 0}
+
+    async def tracking_call(messages, **kwargs):
+        called["n"] += 1
+        return "{}"
+
+    original = minimax_client.call_minimax
+    minimax_client.call_minimax = tracking_call
+    try:
+        result = await _classify_photo_types([], {"vehicle": "Test"})
+    finally:
+        minimax_client.call_minimax = original
+    assert result == {}
+    assert called["n"] == 0  # short-circuit before any LLM call
+
+
+def test_normalize_category_aliases():
+    """The LLM may emit ``auxiliary`` but our enum is ``vehicle_info``."""
+    from agents.planner_agent import _normalize_category
+    assert _normalize_category("exterior") == "exterior"
+    assert _normalize_category("interior") == "interior"
+    assert _normalize_category("auxiliary") == "vehicle_info"
+    assert _normalize_category("license") == "vehicle_info"
+    assert _normalize_category("scene") == "scene_intake"
+    assert _normalize_category("bogus") == ""
+    assert _normalize_category("") == ""
+    assert _normalize_category(None) == ""
 
 
 @pytest.mark.asyncio
@@ -92,7 +188,35 @@ async def test_planner_agent_classifies_all_photos():
         {"id": "172852-内饰.png", "path": "/tmp/c.png"},
         {"id": "172852-现场.png", "path": "/tmp/d.png"},
     ]
-    result = await planner_agent(photos, {"vehicle": "Test Car"})
+
+    from agents import minimax_client
+
+    fake_response = (
+        '{"classifications": ['
+        '{"photo_id": "172852-行驶证.png", "photo_type": "auxiliary", "reason": "证件照"},'
+        '{"photo_id": "172852-车头.png", "photo_type": "exterior", "reason": "车头照"},'
+        '{"photo_id": "172852-内饰.png", "photo_type": "interior", "reason": "驾驶舱"},'
+        '{"photo_id": "172852-现场.png", "photo_type": "scene_intake", "reason": "现场环境"}'
+        ']}'
+    )
+
+    original_call_minimax = minimax_client.call_minimax
+    original_build_image = minimax_client.build_image_content
+
+    async def fake_call_minimax(messages, **kwargs):
+        return fake_response
+
+    def fake_build_image(path, max_width=None):
+        return {"type": "image_url", "image_url": {"url": f"stub://{path}"}}
+
+    minimax_client.call_minimax = fake_call_minimax
+    minimax_client.build_image_content = fake_build_image
+    try:
+        result = await planner_agent(photos, {"vehicle": "Test Car"})
+    finally:
+        minimax_client.call_minimax = original_call_minimax
+        minimax_client.build_image_content = original_build_image
+
     classifications = result["photo_classifications"]
     assert len(classifications) == 4
 

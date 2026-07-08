@@ -144,7 +144,41 @@ async def _classify_photo_types(
     photos: List[Dict[str, Any]],
     vehicle_prior: Dict[str, Any],
 ) -> Dict[str, str]:
-    """Return a deterministic map photo_id -> category."""
+    """Classify each photo into a 4-class category.
+
+    Primary path: call the LLM with a small image-bearing prompt
+    (planner_classification_prompt.j2) so the model actually looks at
+    the photo.  Filenames like ``172852-01.png`` carry no semantic signal
+    so a filename-only heuristic would mis-classify every photo as
+    ``exterior`` (the default fallback).
+
+    Fallback path: if the LLM call fails (network, parse, empty) we
+    fall back to the deterministic filename + aspect-ratio classifier so
+    the pipeline never deadlocks.
+    """
+    if not photos:
+        return {}
+
+    type_map: Dict[str, str] = await _classify_with_llm(photos)
+    if type_map:
+        return type_map
+
+    logger.warning(
+        "[planner] LLM classification returned empty/errored; "
+        "falling back to filename + aspect-ratio heuristic"
+    )
+    return _classify_deterministic(photos)
+
+
+def _classify_deterministic(photos: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Pure-Python fallback that needs no LLM call.
+
+    Useful as a safety net when the LLM call errors out so the
+    pipeline can still return a complete plan.  Filenames like
+    ``172852-01.png`` carry no semantic signal so this will usually
+    return ``exterior`` for everything — exactly the problem the LLM
+    path solves.  Keep this as a fallback only.
+    """
     type_map: Dict[str, str] = {}
     for photo in photos:
         if "_decoded_width" not in photo:
@@ -158,10 +192,182 @@ async def _classify_photo_types(
             continue
         category = _classify_by_signals(photo)
         type_map[photo_id] = category
-        logger.info("[planner] photo %s classified as %s", photo_id, category)
+        logger.info("[planner] photo %s classified as %s (fallback)", photo_id, category)
 
-    logger.info("[planner] deterministic classify done: %d photos", len(type_map))
     return type_map
+
+
+async def _classify_with_llm(photos: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Call the LLM to do 4-class photo classification.
+
+    MiniMax M3 emits long <think> blocks before any JSON.  When asked to
+    classify 32 photos at once, the thinking budget can exhaust
+    ``max_tokens`` before the final JSON appears, leaving us with text
+    that does not parse.  We therefore batch into small groups of
+    ``BATCH_SIZE`` photos and concatenate the per-batch results.
+
+    Each photo is sent as an image block so the model can see the
+    content.  Filenames like ``172852-01.png`` carry no semantic signal
+    so a filename-only heuristic would mis-classify every photo as
+    ``exterior`` (the default fallback).
+
+    Returns
+    -------
+    dict[photo_id, category]
+        Empty dict if the call errors or returns an unexpected shape;
+        callers should fall back to the deterministic classifier in
+        that case.
+    """
+    from agents.minimax_client import build_image_content, call_minimax, extract_json
+    from agents.rules import render_prompt_template
+    from config import IMAGE_MAX_WIDTH, MINIMAX_MODEL
+
+    if not photos:
+        return {}
+
+    # 4 photos per call fits within the model's thinking budget so the
+    # final JSON actually appears (instead of getting truncated mid-payload).
+    BATCH_SIZE = 4
+
+    type_map: Dict[str, str] = {}
+    batches: List[List[Dict[str, Any]]] = [
+        photos[i : i + BATCH_SIZE] for i in range(0, len(photos), BATCH_SIZE)
+    ]
+
+    for batch_idx, batch in enumerate(batches):
+        batch_result = await _classify_one_batch(batch, batch_idx, len(batches))
+        type_map.update(batch_result)
+
+    if not type_map:
+        logger.warning(
+            "[planner] LLM classify returned empty type_map (all batches errored)"
+        )
+
+    for pid, cat in type_map.items():
+        logger.info("[planner] photo %s classified as %s (llm)", pid, cat)
+    return type_map
+
+
+async def _classify_one_batch(
+    batch: List[Dict[str, Any]],
+    batch_idx: int,
+    total_batches: int,
+) -> Dict[str, str]:
+    """Classify a single batch of photos (≤ BATCH_SIZE)."""
+    from agents.minimax_client import build_image_content, call_minimax, extract_json
+    from agents.rules import render_prompt_template
+    from config import IMAGE_MAX_WIDTH, MINIMAX_MODEL
+
+    system_prompt = render_prompt_template("planner_classification_prompt")
+
+    user_blocks: List[Dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"批次 {batch_idx + 1}/{total_batches}，请按顺序逐张判断下述照片的类别。"
+                "只输出一个 JSON 对象，no thinking, no markdown。"
+            ),
+        }
+    ]
+    for photo in batch:
+        path = photo.get("path") or photo.get("url")
+        if not path:
+            continue
+        user_blocks.append(build_image_content(path, max_width=IMAGE_MAX_WIDTH))
+        user_blocks.append(
+            {"type": "text", "text": f"  ↑ photo_id: {photo.get('id', 'unknown')}"}
+        )
+
+    messages = [
+        {
+            "role": "user",
+            "content": user_blocks,
+        }
+    ]
+
+    try:
+        raw_text = await call_minimax(
+            messages=messages,
+            temperature=0.0,
+            # 4 photos per batch: thinking ~3K chars + JSON ~200 chars.
+            # 6000 leaves enough headroom.
+            max_tokens=6000,
+            model=MINIMAX_MODEL,
+            response_format={"type": "json_object"},
+        )
+    except Exception as exc:
+        logger.error("[planner] LLM classify batch %d failed: %s", batch_idx, exc)
+        return {}
+
+    raw = extract_json(raw_text)
+    if not isinstance(raw, dict):
+        logger.warning(
+            "[planner] batch %d returned non-dict: type=%s raw_len=%s",
+            batch_idx, type(raw).__name__,
+            len(raw_text) if raw_text else 0,
+        )
+        return {}
+
+    return _parse_llm_classifications(raw)
+
+
+def _parse_llm_classifications(raw: Dict[str, Any]) -> Dict[str, str]:
+    """Tolerate two common LLM payload shapes:
+
+    1) ``{"classifications": [{"photo_id": ..., "photo_type": ...}, ...]}``
+    2) ``{"<photo_id>": "exterior", ...}``  (flat map)
+    """
+    type_map: Dict[str, str] = {}
+    items = raw.get("classifications")
+    if isinstance(items, list):
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            pid = item.get("photo_id")
+            cat = item.get("photo_type") or item.get("category")
+            if pid and cat:
+                normalized = _normalize_category(cat)
+                if normalized:
+                    type_map[pid] = normalized
+    else:
+        for pid, cat in raw.items():
+            if isinstance(cat, str) and cat in PHOTO_TYPE_CATEGORIES:
+                type_map[pid] = cat
+
+    if not type_map:
+        logger.warning(
+            "[planner] LLM classify raw had no usable entries: keys=%s",
+            list(raw.keys())[:5],
+        )
+    return type_map
+
+
+def _normalize_category(raw_cat: str) -> str:
+    """Map the LLM's free-form category string onto PHOTO_TYPE_CATEGORIES.
+
+    The prompt asks for ``exterior / interior / auxiliary / unknown``
+    but our canonical enum uses ``vehicle_info`` instead of ``auxiliary``
+    and ``scene_intake`` for some scene photos.  This normalizer is
+    conservative: it only forwards strings that fit the canonical enum.
+    """
+    if not raw_cat:
+        return ""
+    cat = raw_cat.lower().strip()
+    aliases = {
+        "auxiliary": "vehicle_info",
+        "vin": "vehicle_info",
+        "document": "vehicle_info",
+        "license": "vehicle_info",
+        "plate": "vehicle_info",
+        "scene": "scene_intake",
+        "scene_intake": "scene_intake",
+        "interior": "interior",
+        "exterior": "exterior",
+        "exclude": "exclude",
+        "unknown": "unknown",
+        "vehicle_info": "vehicle_info",
+    }
+    return aliases.get(cat, "")
 
 
 async def planner_agent(
