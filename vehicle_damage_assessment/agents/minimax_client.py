@@ -36,11 +36,12 @@ async def call_minimax(
     max_tokens: int = 4000,
     model: str | None = None,
     response_format: Dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）"""
     call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     request_model = model or MINIMAX_MODEL
-    logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s json_mode=%s", call_id, request_model, temperature, max_tokens, bool(response_format))
+    logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s json_mode=%s reasoning=%s", call_id, request_model, temperature, max_tokens, bool(response_format), reasoning_effort)
 
     headers = {
         "Authorization": f"Bearer {MINIMAX_API_KEY}",
@@ -54,6 +55,13 @@ async def call_minimax(
     }
     if response_format:
         payload["response_format"] = response_format
+    if reasoning_effort:
+        # MiniMax M3 supports reasoning_effort in {"low", "medium", "high"}.
+        # Default reasoning is unbounded and burns the full max_tokens
+        # budget on a single <think>...</think> block, leaving no room
+        # for the actual JSON answer.  Forcing "low" caps the thinking
+        # so the model has to commit to a structured output.
+        payload["reasoning_effort"] = reasoning_effort
 
     last_exception = None
     for attempt in range(1, 4):

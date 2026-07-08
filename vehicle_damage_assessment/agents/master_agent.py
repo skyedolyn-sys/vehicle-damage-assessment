@@ -102,8 +102,19 @@ async def master_assessment_agent(
     view_results = await asyncio.gather(*[_run_one(p) for p in exterior_photos])
     view_results = [r for r in view_results if r.get("parts")]
 
-    # 5. Aggregate into PartEvidence and region_results
+    # 5. Aggregate into PartEvidence, run side-consistency check, then
+    # build region_results.  The side check downgrades mismatched
+    # observations' confidence (never rewrites the suffix) so the
+    # primary-strong gating in _aggregate_part_evidence has a chance
+    # of rejecting them without breaking legitimately-right observations.
     part_evidence = _aggregate_part_evidence(view_results)
+    side_violations = _check_side_consistency(part_evidence)
+    if side_violations:
+        logger.info(
+            "[master] side-consistency: %d observation(s) downgraded for "
+            "screen/vehicle-side mismatch",
+            side_violations,
+        )
     region_results = _build_region_results(view_results, part_evidence)
 
     # 6. Reviewer
@@ -199,11 +210,58 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
         statuses = [o["status"] for o in entry["observations"]]
         levels = [o["damage_level"] for o in entry["observations"]]
         confidences = [o["confidence"] for o in entry["observations"]]
+        views = [o.get("view_id") for o in entry["observations"]]
 
-        # Conservative status aggregation
-        if "missing" in statuses:
+        # DAMAGE_RECOGNITION_POLICY §3.1 / §4.1: primary-view signals carry
+        # more authority than secondary views.  Count votes for damaged/missing
+        # restricted to primary-view observations; require at least 1 primary
+        # damaged (or ≥2 secondary damaged for low-risk parts) before
+        # accepting damage.  This prevents a single secondary-view damaged
+        # observation from dominating the aggregated status.
+        primary_views = _primary_views_for_part(part_id)
+        primary_strong_views = _primary_strong_views_for_part(part_id)
+        damaged_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "damaged"
+        )
+        missing_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "missing"
+        )
+        primary_strong_damaged_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "damaged"
+            and o.get("view_id") in primary_strong_views
+        )
+        primary_strong_intact_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "intact"
+            and o.get("view_id") in primary_strong_views
+        )
+        primary_intact_votes = sum(
+            1 for o in entry["observations"]
+            if o["status"] == "intact"
+            and o.get("view_id") in primary_views
+        )
+        primary_observations = sum(
+            1 for o in entry["observations"] if o.get("view_id") in primary_views
+        )
+
+        if missing_votes > 0:
             entry["aggregated_status"] = "missing"
-        elif "damaged" in statuses:
+        elif primary_strong_intact_votes >= 2 and primary_strong_damaged_votes == 0:
+            # §3.1: at least TWO independent strong-primary observations
+            # agree intact and no strong-primary damaged signal exists.
+            # A single strong-primary intact is not enough to override
+            # broader secondary damaged consensus.
+            entry["aggregated_status"] = "intact"
+        elif primary_strong_damaged_votes >= 1 and primary_strong_intact_votes < 2:
+            # Primary view says damaged — accept unless contradicted by
+            # strong-primary intact (handled above).
+            entry["aggregated_status"] = "damaged"
+        elif damaged_votes >= 2 and primary_intact_votes == 0 and primary_observations == 0:
+            # No primary observations but ≥2 damaged from secondary views —
+            # trust the consensus when primary view didn't reach the part.
             entry["aggregated_status"] = "damaged"
         elif all(s == "intact" for s in statuses):
             entry["aggregated_status"] = "intact"
@@ -231,6 +289,152 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             entry["conflicting"] = True
 
     return evidence
+
+
+def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
+    """Downgrade confidence on damaged observations whose view is
+    outside the part's primary view set.
+
+    Replaces the previous mirror-flip post-processor, which had a
+    self-referential fallback (``screen_side`` was derived from
+    ``part_id.endswith`` — the same vehicle suffix it was being
+    compared against) and fired on every side-bearing observation
+    regardless of whether anything was actually wrong.
+
+    Why this is the right shape:
+
+    * Per-part *primary* view set is homogeneous on suffix
+      (``headlight_front_left`` → ``{front, front_left, left}``, all
+      ``_left``-bearing).  Therefore the *only* "view that disagrees
+      with the part's vehicle side" we could potentially see is
+      **already not in the primary set** — i.e. the model emitted
+      a side-bearing part from a view the part does not canonically
+      belong to.  That is the exact side-confusion failure mode.
+    * In ``_aggregate_part_evidence`` such observations cannot
+      contribute to ``primary_strong_damaged_votes`` (already filtered
+      out by the primary set), but they DO contribute to
+      ``damaged_votes``, and a count of ``damaged_votes >= 2`` with
+      no primary observations is enough to set the part to
+      ``damaged`` via the secondary-consensus fallback.  That is the
+      pathway this routine blocks.
+    * The fix is **only** to downgrade ``confidence`` to ``low`` on
+      those out-of-primary damaged observations.  The part's suffix
+      and the observation's status are **never** rewritten — the
+      DAMAGE_RECOGNITION_POLICY guardrail (do not silently flip
+      ``_right`` to ``_left``) holds.
+    * No mirror table is consulted.  The check operates entirely on
+      the part's own primary view set, which is the authoritative
+      answer to "what views is this part native to?".
+
+    Returns
+    -------
+    int
+        Number of downgraded observations.
+    """
+    violations = 0
+    for part_id, entry in evidence.items():
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue  # non-side parts
+
+        primary_views = _primary_views_for_part(part_id)
+        if not primary_views:
+            continue  # part has no primary view set; skip
+
+        for obs in entry["observations"]:
+            view_id = obs.get("view_id")
+            if not view_id:
+                continue
+            if obs.get("status") != "damaged":
+                continue
+            if view_id in primary_views:
+                continue  # in-primary — trust the primary gating
+
+            # Out-of-primary damaged observation.  Downgrade so it
+            # cannot drive the secondary-consensus path.
+            violations += 1
+            if not obs.get("_side_mismatch"):
+                obs["_side_mismatch"] = True
+                obs["_side_mismatch_view"] = view_id
+                obs["_side_mismatch_reason"] = (
+                    f"part={part_id} has a damaged observation from "
+                    f"view={view_id!r}, which is not in the part's "
+                    f"primary view set {sorted(primary_views)}; "
+                    f"downgrading to confidence=low to block the "
+                    f"secondary-consensus fallback"
+                )
+                if obs.get("confidence") != "low":
+                    obs["confidence"] = "low"
+            entry["conflicting"] = True
+            logger.info(
+                "[master.side] downgrade part=%s view=%s "
+                "(view not in primary %s)",
+                part_id, view_id, sorted(primary_views),
+            )
+
+    return violations
+
+
+_PRIMARY_VIEW_CACHE: Dict[str, set] = {}
+_PRIMARY_STRONG_VIEW_CACHE: Dict[str, set] = {}
+
+
+def _primary_views_for_part(part_id: str) -> set:
+    """Return the set of primary view ids (priority <= 1) for a given part.
+
+    Cached in a module-level dict because we query this on every part for
+    every assessment.
+    """
+    if part_id in _PRIMARY_VIEW_CACHE:
+        return _PRIMARY_VIEW_CACHE[part_id]
+    primary = _load_primary_views(part_id, threshold=1)
+    _PRIMARY_VIEW_CACHE[part_id] = primary
+    return primary
+
+
+def _primary_strong_views_for_part(part_id: str) -> set:
+    """Return the strict-primary view ids (priority == 0) for a given part."""
+    if part_id in _PRIMARY_STRONG_VIEW_CACHE:
+        return _PRIMARY_STRONG_VIEW_CACHE[part_id]
+    primary = _load_primary_views(part_id, threshold=0)
+    _PRIMARY_STRONG_VIEW_CACHE[part_id] = primary
+    return primary
+
+
+def _load_primary_views(part_id: str, threshold: int) -> set:
+    """Helper that loads the priority table once per part.
+
+    Merges two sources from ``view_weights.yaml`` so the
+    side-consistency check sees the same authoritative "which views
+    are native to this part?" answer that the rest of the pipeline
+    uses:
+
+    1. ``part_view_priority`` (dict form) — primary strong views are
+       those with priority ``<= threshold`` (0 for strict, 1 for
+       primary).
+    2. ``primary_view`` (list form) — a legacy compact list of
+       canonical views for parts that do not have a full priority
+       table (e.g. ``pillar_a_left``).  These are treated as
+       priority 0.
+    """
+    try:
+        from agents.rules import load_part_view_priority, load_view_weights
+        priority_table = load_part_view_priority()
+        view_weights = load_view_weights()
+    except Exception:
+        priority_table, view_weights = {}, {}
+
+    result: set = {
+        view_id
+        for view_id, pri in priority_table.get(part_id, {}).items()
+        if pri <= threshold
+    }
+
+    # Merge in the ``primary_view`` list block at priority 0.
+    if threshold >= 0:
+        primary_list = view_weights.get("primary_view", {}).get(part_id, []) or []
+        result.update(primary_list)
+
+    return result
 
 
 def _boost_confidence(base: str, evidence_count: int) -> str:
