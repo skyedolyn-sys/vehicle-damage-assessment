@@ -32,6 +32,15 @@ _view_file_handler.setLevel(logging.INFO)
 logger.addHandler(_view_file_handler)
 logger.setLevel(logging.INFO)
 
+# Dedicated trace log for per-photo verdicts so the human auditor can read
+# 32 one-line summaries without scrolling through other diagnostic output.
+_view_trace_handler = logging.FileHandler(
+    os.path.expanduser("~/vehicle_damage_assessment_view_trace.log"), mode="w", encoding="utf-8"
+)
+_view_trace_handler.setFormatter(logging.Formatter("%(message)s"))
+_view_trace_handler.setLevel(logging.INFO)
+logger.addHandler(_view_trace_handler)
+
 
 #: Status ordering for conservative aggregation.
 _STATUS_PRIORITY = {
@@ -94,18 +103,23 @@ async def view_agent(
     logger.info("[view_agent] start photo_id=%s", photo_id)
 
     image_content = build_image_content(photo.get("path") or photo.get("url"), max_width=IMAGE_MAX_WIDTH)
-    prompt = render_prompt_template(
+
+    # Single user message that contains BOTH the image and the rule prompt.
+    # Putting the image and the rules in the same message gives M3-Vision a
+    # single coherent context to reason against (rather than splitting them
+    # across a long "system" role + a separate image-bearing "user" turn).
+    rules = render_prompt_template(
         "view_agent_prompt",
         photo_id=photo_id,
         vehicle_name=vehicle_name,
     )
+    user_text = f"{rules}\n\nFollow the rules above. Output JSON only — one object with camera_analysis, primary_view, view_detections, parts."
 
     messages = [
-        {"role": "system", "content": prompt},
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "请分析这张照片的外观视角和可见部件损伤状态，只输出 JSON。"},
+                {"type": "text", "text": user_text},
                 image_content,
             ],
         },
@@ -113,7 +127,7 @@ async def view_agent(
 
     raw_text = await call_minimax(
         messages=messages,
-        temperature=0.0,
+        temperature=0.2,
         max_tokens=5000,
         model=MINIMAX_MODEL,
         response_format={"type": "json_object"},
@@ -124,9 +138,16 @@ async def view_agent(
         logger.warning("[view_agent] photo_id=%s returned non-dict: %s", photo_id, type(raw))
         raw = {}
 
+    # Diagnostic dump: capture the model's own view_detections + descriptions
+    # so we can audit whether it noticed "右后视镜朝外/车标在右" cues.
+    _dump_minimax_raw(photo_id, raw)
+
     result = _normalize_view_agent_result(photo_id, raw)
     result = _backfill_missing_parts(result)
     result = _calibrate_result_confidence(result)
+
+    # Per-photo debug dump (so a human can audit each ViewAgent verdict).
+    _dump_per_photo_verdict(photo_id, result)
 
     logger.info(
         "[view_agent] done photo_id=%s primary_view=%s parts=%d",
@@ -135,6 +156,72 @@ async def view_agent(
         len(result.get("parts", [])),
     )
     return result
+
+
+def _dump_minimax_raw(photo_id: str, raw: Dict[str, Any]) -> None:
+    """Dump the raw M3-Vision verdict to a dedicated trace log.
+
+    For calibration, we need to know:
+    - which views the model believes are visible (view_detections list)
+    - which view it picked as primary and why
+    - what textual evidence it gave in part descriptions (so we can audit
+      whether it actually noticed right-mirror-facing-out, badge-on-right-side,
+      wheel-facing-camera, etc.)
+    """
+    parts = raw.get("parts", []) or []
+    detections = raw.get("view_detections", []) or []
+    primary = raw.get("primary_view")
+
+    # Build "<view>=<score>" summary, sorted by score descending.
+    det_summary = ",".join(
+        f"{d.get('view_id')}={d.get('confidence_score'):.2f}"
+        for d in detections
+    ) or "—"
+
+    # Concatenate damaged-only descriptions so a human can scan evidence
+    # in the trace log.  Intact descriptions are omitted to keep the log short.
+    damaged_evidence = []
+    for p in parts:
+        if p.get("status") == "damaged":
+            damaged_evidence.append(
+                f"{p.get('part_id')}={p.get('description', '')[:120]}"
+            )
+    damaged_str = " | ".join(damaged_evidence) or "—"
+
+    logger.info(
+        "[view_agent.raw] %s | primary=%s | detections=[%s] | damaged=[%s]",
+        photo_id,
+        primary,
+        det_summary,
+        damaged_str,
+    )
+
+
+def _dump_per_photo_verdict(photo_id: str, result: Dict[str, Any]) -> None:
+    """Write a one-line-per-damage observation so the human can scan 32 photos.
+
+    Format: ``<photo_id> | view=<primary> | <part_id>:<status>:<level>[:<conf>] ...``
+    Only damaged/missing observations are listed; intact parts are summarised
+    by count.  Written to a dedicated log so it does not pollute normal logs.
+    """
+    primary = result.get("primary_view") or "unknown"
+    damaged: list[str] = []
+    intact_count = 0
+    for obs in result.get("parts", []):
+        if obs.get("status") in ("damaged", "missing"):
+            damaged.append(
+                f"{obs['part_id']}={obs.get('status', '?')}/{obs.get('damage_level', '?')}/{obs.get('confidence', '?')}"
+            )
+        elif obs.get("status") == "intact":
+            intact_count += 1
+    damaged_str = ", ".join(damaged) if damaged else "—"
+    logger.info(
+        "[view_agent.trace] %s | view=%s | damaged=[%s] | intact=%d",
+        photo_id,
+        primary,
+        damaged_str,
+        intact_count,
+    )
 
 
 def _normalize_view_agent_result(photo_id: str, raw: Dict[str, Any]) -> Dict[str, Any]:
