@@ -102,8 +102,19 @@ async def master_assessment_agent(
     view_results = await asyncio.gather(*[_run_one(p) for p in exterior_photos])
     view_results = [r for r in view_results if r.get("parts")]
 
-    # 5. Aggregate into PartEvidence and region_results
+    # 5. Aggregate into PartEvidence, run side-consistency check, then
+    # build region_results.  The side check downgrades mismatched
+    # observations' confidence (never rewrites the suffix) so the
+    # primary-strong gating in _aggregate_part_evidence has a chance
+    # of rejecting them without breaking legitimately-right observations.
     part_evidence = _aggregate_part_evidence(view_results)
+    side_violations = _check_side_consistency(part_evidence)
+    if side_violations:
+        logger.info(
+            "[master] side-consistency: %d observation(s) downgraded for "
+            "screen/vehicle-side mismatch",
+            side_violations,
+        )
     region_results = _build_region_results(view_results, part_evidence)
 
     # 6. Reviewer
@@ -278,6 +289,94 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             entry["conflicting"] = True
 
     return evidence
+
+
+#: Side-mirror lookup.  For each view, returns:
+#:   - the vehicle-side that the screen-LEFT maps to (after mirror-flip)
+#:   - whether the view is "side-on" (no mirror — camera looks along the
+#:     vehicle's long axis).  Side-on views are not used for consistency
+#:     checks because the part's screen-side and vehicle-side line up
+#:     approximately.
+_SIDE_FLIP_FOR_VIEW: Dict[str, str] = {
+    "front": "right",
+    "front_left": "right",
+    "front_right": "left",
+    "rear": "left",
+    "rear_left": "left",
+    "rear_right": "right",
+}
+_SIDE_ON_VIEWS: frozenset = frozenset({"left", "right", "top"})
+
+
+def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
+    """Validate _left / _right suffix against the view's mirror-flip.
+
+    For each part whose observations include a primary view with a
+    defined mirror-flip (front / front_left / front_right / rear /
+    rear_left / rear_right), the side suffix on a damaged observation
+    must be consistent with the view's expected screen-to-vehicle map.
+
+    The check NEVER rewrites a suffix — that would risk flipping a
+    correctly-tagged ``_right`` into ``_left`` if the model happened
+    to be right.  Instead it:
+
+    - Downgrades the offending observation's confidence to ``low`` so
+      it no longer dominates the per-part aggregation.
+    - Marks the part as ``conflicting`` so downstream components
+      (synthesizer, topology_comparator) can flag it.
+    - Emits a structured log entry so a human auditor can see the
+      exact mismatch.
+
+    Returns
+    -------
+    int
+        Number of side-consistency violations detected.  Pure metric
+        for the human auditor; not used to drive automated decisions.
+    """
+    from agents.view_mapping import _normalize_view_id
+
+    violations = 0
+    for part_id, entry in evidence.items():
+        if "_left" not in part_id and "_right" not in part_id:
+            continue  # non-side parts don't carry a side suffix
+
+        expected_vehicle_side = part_id.split("_")[-1]  # "left" or "right"
+        primary_views = _primary_views_for_part(part_id)
+        if not primary_views:
+            continue
+
+        for obs in entry["observations"]:
+            view_id = obs.get("view_id")
+            if not view_id:
+                continue
+            normalized = _normalize_view_id(view_id)
+            if normalized not in _SIDE_FLIP_FOR_VIEW:
+                continue  # side-on or top: skip
+
+            screen_side = obs.get("side") or (
+                "left" if obs.get("part_id", "").endswith("_left") else "right"
+            )
+            expected_screen_side = "right" if expected_vehicle_side == "left" else "left"
+
+            if screen_side != expected_screen_side:
+                violations += 1
+                if not obs.get("_side_mismatch"):
+                    obs["_side_mismatch"] = True
+                    obs["_side_mismatch_view"] = view_id
+                    obs["_side_mismatch_reason"] = (
+                        f"part={part_id} expects vehicle {expected_vehicle_side} "
+                        f"under view={view_id}, but observation says screen {screen_side}"
+                    )
+                    if obs.get("confidence") != "low":
+                        obs["confidence"] = "low"
+                entry["conflicting"] = True
+                logger.info(
+                    "[master.side] mismatch part=%s view=%s "
+                    "expected_vehicle_side=%s screen_side=%s",
+                    part_id, view_id, expected_vehicle_side, screen_side,
+                )
+
+    return violations
 
 
 _PRIMARY_VIEW_CACHE: Dict[str, set] = {}
