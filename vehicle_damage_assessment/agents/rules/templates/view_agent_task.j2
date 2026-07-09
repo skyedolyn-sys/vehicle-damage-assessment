@@ -1,0 +1,30 @@
+请分析这张车辆外观照片，按 system role 中规定的工作方法判定视角并识别可见部件的损伤状态。
+
+## 9 个标准视角
+front / front_left / front_right / rear / rear_left / rear_right / left / right / top
+
+## 视角 → 屏幕方向
+| 视角 | 面对 | 屏幕左 = 车辆 |
+|---|---|---|
+| front / front_left / front_right | 车头 | right |
+| rear / rear_left / rear_right | 车尾 | left |
+| left | vehicle 左侧 | rear |
+| right | vehicle 右侧 | front |
+
+## 33 个部件清单
+front: hood, bumper_front, headlight_front_left, headlight_front_right, grille_front, fender_front_left, fender_front_right, windshield_front
+rear: trunk_lid, tailgate, bumper_rear, taillight_rear_left, taillight_rear_right, windshield_rear
+left: door_front_left, door_rear_left, mirror_left, fender_rear_left, pillar_a_left, pillar_b_left, pillar_c_left
+right: door_front_right, door_rear_right, mirror_right, fender_rear_right, pillar_a_right, pillar_b_right, pillar_c_right
+roof: roof_front, roof_middle, roof_rear, sunroof_glass, roof_rack
+
+## 字段约束
+- `status`: intact / damaged / missing / uncertain
+- `damage_level`: none / light / moderate / severe / unknown
+- `damage_types`: scratch / dent / deformation / crack / breakage / paint_loss / corrosion（可多选，none 也算）
+- `confidence`: high / medium / low
+- `parts[].description`：每个 damaged 部件必须含 **具体位置 + camera_position 引用**
+
+## 本次任务
+- photo_id: [[ photo_id ]]
+- 车型信息：[[ vehicle_name ]]
