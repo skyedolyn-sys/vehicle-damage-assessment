@@ -35,6 +35,7 @@ from agents.view_mapping import (
 )
 from config import MAX_CONCURRENT_API_CALLS
 from models import DamageAssessment, PartActualState
+from models.part_state import Status, DamageLevel
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,19 @@ async def master_assessment_agent(
     assessment = compare_topology(topology, actual_states)
     assessment._plan = plan  # type: ignore[attr-defined]
 
+    # 9.5. Sunroof roof-metal propagation (post-topology).
+    # Topology rules (Rule 10/11) just promoted roof_front/middle/rear to
+    # damaged severe from pillar / windshield / structural evidence.  When
+    # the sample has no top-view photo, sunroof_glass remains UNCERTAIN.
+    # The sunroof sits inside the now-damaged roof panels, so promote it
+    # to damaged severe too.  Runs after compare_topology so it sees the
+    # propagated roof_metal state.
+    #
+    # Toggleable via SKIP_SUNROOF_PROPAGATION=1 (for A/B comparison tests
+    # — production runs should always have it enabled).
+    if os.getenv("SKIP_SUNROOF_PROPAGATION") != "1":
+        _apply_sunroof_roof_propagation(assessment)
+
     logger.info(
         "[master] done findings=%d damaged=%d uncertain=%d",
         len(assessment.parts),
@@ -140,6 +154,137 @@ async def master_assessment_agent(
         len(assessment.uncertain_parts),
     )
     return assessment
+
+
+def _apply_sunroof_roof_propagation(assessment: DamageAssessment) -> None:
+    """Promote sunroof_glass when ≥1 adjacent roof metal part is DAMAGED.
+
+    Two cases the upstream pipeline gets wrong:
+
+    (a) UNCERTAIN — when no top-view photo exists, the per-part synthesizer
+        leaves sunroof_glass as UNCERTAIN.  But the sunroof sits inside the
+        now-damaged roof panels, so it is very likely damaged too.  Promote
+        to damaged severe.
+
+    (b) MISSING — when the model sees a top-view but observes the sunroof is
+        *gone* (broken-out glass, fragmented).  The synthesizer may pick
+        ``missing`` as the terminal status.  For downstream reporting it is
+        more useful to keep the conclusion as ``damaged severe`` because the
+        vehicle had a sunroof and the sunroof is now destroyed.  Same
+        rationale as :func:`agents.synthesizer._apply_rear_missing_to_damaged_fallback`.
+
+    Conservative gate: requires ≥1 of {roof_front, roof_middle, roof_rear}
+    to be DAMAGED (not merely UNCERTAIN or INTACT).  No effect when
+    sunroof_glass is already DAMAGED or when no roof metal is DAMAGED.
+    Mutates the assessment in place: replaces the sunroof_glass PartActualState
+    with a DAMAGED SEVERE one and updates the classified lists.
+    """
+    ROOF_METAL = ("roof_front", "roof_middle", "roof_rear")
+    status_by_id = {p.part_id: p.status for p in assessment.parts}
+    damaged_neighbors = [n for n in ROOF_METAL if status_by_id.get(n) == Status.DAMAGED]
+    if not damaged_neighbors:
+        return
+
+    new_parts: List[PartActualState] = []
+    promoted = False
+    for part in assessment.parts:
+        if part.part_id != "sunroof_glass":
+            new_parts.append(part)
+            continue
+
+        if part.status == Status.DAMAGED:
+            # Already correct — helper doesn't overwrite.
+            new_parts.append(part)
+            continue
+
+        inherited_types = list(part.damage_types)
+        damaged_evidence_types = {"breakage", "crack", "deformation",
+                                  "shatter", "fragment"}
+        if part.status == Status.UNCERTAIN:
+            # No direct evidence — promote based on roof_metal adjacency.
+            eligible = True
+        elif part.status == Status.MISSING:
+            # Direct observation present.  Only override to damaged if the
+            # observation already reports breakage / crack / deformation
+            # (i.e. the synthesizer picked 'missing' as terminal status but
+            # the view_agent saw damage).  Pure-missing with no damaged
+            # evidence means "no sunroof" — leave it alone.
+            eligible = any(
+                dt in damaged_evidence_types for dt in inherited_types
+            )
+        else:
+            eligible = False
+
+        if not eligible:
+            new_parts.append(part)
+            continue
+
+        if part.status == Status.UNCERTAIN:
+            note_suffix = (
+                f"车顶金属面板严重受损（{', '.join(damaged_neighbors)}），"
+                f"推断天窗玻璃同步受损"
+            )
+        else:  # MISSING
+            note_suffix = (
+                f"视图已观察到玻璃破损（{', '.join(damaged_neighbors)} 同步受损），"
+                f"将 missing 回退为 damaged severe"
+            )
+        new_notes = f"{part.notes}；{note_suffix}" if part.notes else note_suffix
+        # Preserve damage_types from view_agent observations (breakage,
+        # crack, etc.) instead of overwriting with a generic placeholder.
+        cleaned_types = [
+            dt for dt in inherited_types
+            if dt not in ("none", "missing", "")
+        ]
+        damage_types_final = cleaned_types if cleaned_types else ["deformation"]
+        new_parts.append(PartActualState(
+            part_id=part.part_id,
+            part_name=part.part_name,
+            part_category=part.part_category,
+            side=part.side,
+            status=Status.DAMAGED,
+            damage_level=DamageLevel.SEVERE,
+            damage_types=damage_types_final,
+            standard_exists=part.standard_exists,
+            actual_visible=part.actual_visible,
+            actual_present=part.actual_present,
+            confidence="medium",
+            evidence_photos=list(part.evidence_photos),
+            notes=new_notes,
+            adjacent_status=dict(part.adjacent_status),
+            photo_type=part.photo_type,
+            evidence_sources=list(part.evidence_sources),
+        ))
+        promoted = True
+        logger.info(
+            "[sunroof-propagation] promoted sunroof_glass from %s → damaged_severe "
+            "(roof_metal damaged: %s)",
+            part.status.value,
+            ", ".join(damaged_neighbors),
+        )
+
+    if not promoted:
+        return
+
+    assessment.parts = new_parts
+    assessment.damaged_parts = [
+        p.part_id for p in new_parts if p.status == Status.DAMAGED
+    ]
+    assessment.intact_parts = [
+        p.part_id for p in new_parts if p.status == Status.INTACT
+    ]
+    assessment.uncertain_parts = [
+        p.part_id for p in new_parts if p.status == Status.UNCERTAIN
+    ]
+    assessment.missing_parts = [
+        p.part_id for p in new_parts if p.status == Status.MISSING
+    ]
+    if "damaged_parts_count" in assessment.summary:
+        assessment.summary["damaged_parts_count"] = len(assessment.damaged_parts)
+    if "intact_parts_count" in assessment.summary:
+        assessment.summary["intact_parts_count"] = len(assessment.intact_parts)
+    if "uncertain_parts_count" in assessment.summary:
+        assessment.summary["uncertain_parts_count"] = len(assessment.uncertain_parts)
 
 
 def _extract_photo_classifications(plan: Dict[str, Any]) -> Dict[str, str]:
@@ -291,90 +436,85 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
     return evidence
 
 
-#: Side-mirror lookup.  For each view, returns:
-#:   - the vehicle-side that the screen-LEFT maps to (after mirror-flip)
-#:   - whether the view is "side-on" (no mirror — camera looks along the
-#:     vehicle's long axis).  Side-on views are not used for consistency
-#:     checks because the part's screen-side and vehicle-side line up
-#:     approximately.
-_SIDE_FLIP_FOR_VIEW: Dict[str, str] = {
-    "front": "right",
-    "front_left": "right",
-    "front_right": "left",
-    "rear": "left",
-    "rear_left": "left",
-    "rear_right": "right",
-}
-_SIDE_ON_VIEWS: frozenset = frozenset({"left", "right", "top"})
-
-
 def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
-    """Validate _left / _right suffix against the view's mirror-flip.
+    """Downgrade confidence on damaged observations whose view is
+    outside the part's primary view set.
 
-    For each part whose observations include a primary view with a
-    defined mirror-flip (front / front_left / front_right / rear /
-    rear_left / rear_right), the side suffix on a damaged observation
-    must be consistent with the view's expected screen-to-vehicle map.
+    Replaces the previous mirror-flip post-processor, which had a
+    self-referential fallback (``screen_side`` was derived from
+    ``part_id.endswith`` — the same vehicle suffix it was being
+    compared against) and fired on every side-bearing observation
+    regardless of whether anything was actually wrong.
 
-    The check NEVER rewrites a suffix — that would risk flipping a
-    correctly-tagged ``_right`` into ``_left`` if the model happened
-    to be right.  Instead it:
+    Why this is the right shape:
 
-    - Downgrades the offending observation's confidence to ``low`` so
-      it no longer dominates the per-part aggregation.
-    - Marks the part as ``conflicting`` so downstream components
-      (synthesizer, topology_comparator) can flag it.
-    - Emits a structured log entry so a human auditor can see the
-      exact mismatch.
+    * Per-part *primary* view set is homogeneous on suffix
+      (``headlight_front_left`` → ``{front, front_left, left}``, all
+      ``_left``-bearing).  Therefore the *only* "view that disagrees
+      with the part's vehicle side" we could potentially see is
+      **already not in the primary set** — i.e. the model emitted
+      a side-bearing part from a view the part does not canonically
+      belong to.  That is the exact side-confusion failure mode.
+    * In ``_aggregate_part_evidence`` such observations cannot
+      contribute to ``primary_strong_damaged_votes`` (already filtered
+      out by the primary set), but they DO contribute to
+      ``damaged_votes``, and a count of ``damaged_votes >= 2`` with
+      no primary observations is enough to set the part to
+      ``damaged`` via the secondary-consensus fallback.  That is the
+      pathway this routine blocks.
+    * The fix is **only** to downgrade ``confidence`` to ``low`` on
+      those out-of-primary damaged observations.  The part's suffix
+      and the observation's status are **never** rewritten — the
+      DAMAGE_RECOGNITION_POLICY guardrail (do not silently flip
+      ``_right`` to ``_left``) holds.
+    * No mirror table is consulted.  The check operates entirely on
+      the part's own primary view set, which is the authoritative
+      answer to "what views is this part native to?".
 
     Returns
     -------
     int
-        Number of side-consistency violations detected.  Pure metric
-        for the human auditor; not used to drive automated decisions.
+        Number of downgraded observations.
     """
-    from agents.view_mapping import _normalize_view_id
-
     violations = 0
     for part_id, entry in evidence.items():
-        if "_left" not in part_id and "_right" not in part_id:
-            continue  # non-side parts don't carry a side suffix
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue  # non-side parts
 
-        expected_vehicle_side = part_id.split("_")[-1]  # "left" or "right"
         primary_views = _primary_views_for_part(part_id)
         if not primary_views:
-            continue
+            continue  # part has no primary view set; skip
 
         for obs in entry["observations"]:
             view_id = obs.get("view_id")
             if not view_id:
                 continue
-            normalized = _normalize_view_id(view_id)
-            if normalized not in _SIDE_FLIP_FOR_VIEW:
-                continue  # side-on or top: skip
+            if obs.get("status") != "damaged":
+                continue
+            if view_id in primary_views:
+                continue  # in-primary — trust the primary gating
 
-            screen_side = obs.get("side") or (
-                "left" if obs.get("part_id", "").endswith("_left") else "right"
-            )
-            expected_screen_side = "right" if expected_vehicle_side == "left" else "left"
-
-            if screen_side != expected_screen_side:
-                violations += 1
-                if not obs.get("_side_mismatch"):
-                    obs["_side_mismatch"] = True
-                    obs["_side_mismatch_view"] = view_id
-                    obs["_side_mismatch_reason"] = (
-                        f"part={part_id} expects vehicle {expected_vehicle_side} "
-                        f"under view={view_id}, but observation says screen {screen_side}"
-                    )
-                    if obs.get("confidence") != "low":
-                        obs["confidence"] = "low"
-                entry["conflicting"] = True
-                logger.info(
-                    "[master.side] mismatch part=%s view=%s "
-                    "expected_vehicle_side=%s screen_side=%s",
-                    part_id, view_id, expected_vehicle_side, screen_side,
+            # Out-of-primary damaged observation.  Downgrade so it
+            # cannot drive the secondary-consensus path.
+            violations += 1
+            if not obs.get("_side_mismatch"):
+                obs["_side_mismatch"] = True
+                obs["_side_mismatch_view"] = view_id
+                obs["_side_mismatch_reason"] = (
+                    f"part={part_id} has a damaged observation from "
+                    f"view={view_id!r}, which is not in the part's "
+                    f"primary view set {sorted(primary_views)}; "
+                    f"downgrading to confidence=low to block the "
+                    f"secondary-consensus fallback"
                 )
+                if obs.get("confidence") != "low":
+                    obs["confidence"] = "low"
+            entry["conflicting"] = True
+            logger.info(
+                "[master.side] downgrade part=%s view=%s "
+                "(view not in primary %s)",
+                part_id, view_id, sorted(primary_views),
+            )
 
     return violations
 
@@ -406,17 +546,40 @@ def _primary_strong_views_for_part(part_id: str) -> set:
 
 
 def _load_primary_views(part_id: str, threshold: int) -> set:
-    """Helper that loads the priority table once per part."""
+    """Helper that loads the priority table once per part.
+
+    Merges two sources from ``view_weights.yaml`` so the
+    side-consistency check sees the same authoritative "which views
+    are native to this part?" answer that the rest of the pipeline
+    uses:
+
+    1. ``part_view_priority`` (dict form) — primary strong views are
+       those with priority ``<= threshold`` (0 for strict, 1 for
+       primary).
+    2. ``primary_view`` (list form) — a legacy compact list of
+       canonical views for parts that do not have a full priority
+       table (e.g. ``pillar_a_left``).  These are treated as
+       priority 0.
+    """
     try:
-        from agents.rules import load_part_view_priority
+        from agents.rules import load_part_view_priority, load_view_weights
         priority_table = load_part_view_priority()
+        view_weights = load_view_weights()
     except Exception:
-        priority_table = {}
-    return {
+        priority_table, view_weights = {}, {}
+
+    result: set = {
         view_id
         for view_id, pri in priority_table.get(part_id, {}).items()
         if pri <= threshold
     }
+
+    # Merge in the ``primary_view`` list block at priority 0.
+    if threshold >= 0:
+        primary_list = view_weights.get("primary_view", {}).get(part_id, []) or []
+        result.update(primary_list)
+
+    return result
 
 
 def _boost_confidence(base: str, evidence_count: int) -> str:
