@@ -271,6 +271,154 @@ class TestRule9PillarPropagation:
         assert pillar["status"] == "uncertain"
 
 
+class TestBackfillNotRealObservation:
+    """Backfilled (never-observed) parts must NOT be cascade-promoted by Rules 9-11.
+
+    172852 systematic FP: pillar_b_right's evidence was entirely checklist
+    backfill (model never saw it), yet Rule 9 promoted it to damaged from the
+    adjacent pillar_a_right severe.  The backfill signal
+    (model_confidence_score == 0.0) was dropped at _build_evidence_sources, so
+    the topology rules could not tell a backfill from a real observation.
+
+    The fix carries an explicit ``observed`` flag end-to-end and gates Rules
+    9/10/11 on "has a REAL observation", not "evidence_sources non-empty".
+    """
+
+    def test_build_evidence_sources_marks_backfill_not_observed(self):
+        """_build_evidence_sources tags backfill (score 0.0) as observed=False."""
+        from agents.synthesizer import _build_evidence_sources
+
+        backfill = {
+            "part_id": "pillar_b_right",
+            "status": "uncertain",
+            "damage_level": "unknown",
+            "confidence": "low",
+            "model_confidence_score": 0.0,
+            "description": "该部件在照片中未被识别到，按面占比候选清单补齐为uncertain",
+            "notes": "",
+            "evidence_photo": ["photo_29"],
+            "_region": "rear_right",
+        }
+        real = {
+            "part_id": "pillar_b_right",
+            "status": "damaged",
+            "damage_level": "severe",
+            "confidence": "high",
+            "model_confidence_score": 0.85,
+            "notes": "右B柱变形",
+            "evidence_photo": ["photo_02"],
+            "_region": "front_right",
+        }
+        sources = _build_evidence_sources([backfill, real])
+        by_photo = {tuple(s["evidence_photo"]): s for s in sources}
+        assert by_photo[("photo_29",)]["observed"] is False
+        assert by_photo[("photo_02",)]["observed"] is True
+
+    def test_build_evidence_sources_defaults_observed_true_when_score_absent(self):
+        """Legacy candidates without model_confidence_score default observed=True."""
+        from agents.synthesizer import _build_evidence_sources
+
+        legacy = {
+            "part_id": "pillar_a_left",
+            "status": "uncertain",
+            "damage_level": "unknown",
+            "confidence": "low",
+            "notes": "遮挡",
+            "evidence_photo": [],
+            "_region": "front_left",
+        }
+        sources = _build_evidence_sources([legacy])
+        assert sources[0]["observed"] is True
+
+    def test_pillar_all_backfill_not_promoted_by_rule9(self):
+        """Rule 9: a pillar whose ONLY evidence is backfill stays uncertain.
+
+        This is the 172852 pillar_b_right case: pillar_a_right is severe, but
+        pillar_b_right was never observed (all backfill), so it must NOT be
+        cascade-promoted to damaged.
+        """
+        topology = _build_full_topology()
+        region_results = [
+            {
+                "region": "front_right",
+                "parts": [
+                    {
+                        "part_id": "pillar_a_right",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["deformation"],
+                        "confidence": "high",
+                        "model_confidence_score": 0.9,
+                        "evidence_photo": ["photo_02"],
+                        "notes": "右A柱严重变形",
+                    },
+                    {
+                        # pillar_b_right — pure backfill, model never observed it.
+                        "part_id": "pillar_b_right",
+                        "status": "uncertain",
+                        "damage_level": "unknown",
+                        "damage_type": [],
+                        "confidence": "low",
+                        "model_confidence_score": 0.0,
+                        "description": "该部件在照片中未被识别到，按面占比候选清单补齐为uncertain",
+                        "evidence_photo": ["photo_02"],
+                        "notes": "",
+                    },
+                ],
+                "uncertain_items": [],
+            },
+        ]
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_b_right"]
+        assert pillar["status"] == "uncertain", (
+            "unobserved (all-backfill) pillar must not be cascade-promoted to damaged"
+        )
+
+    def test_pillar_with_real_observation_still_promoted_by_rule9(self):
+        """Regression guard: a pillar with a REAL observation + severe neighbor
+        is still promoted (the fix must not break legitimate propagation)."""
+        topology = _build_full_topology()
+        region_results = [
+            {
+                "region": "front",
+                "parts": [
+                    {
+                        "part_id": "windshield_front",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["crack"],
+                        "confidence": "high",
+                        "model_confidence_score": 0.9,
+                        "evidence_photo": ["photo_01"],
+                        "notes": "碎裂",
+                    }
+                ],
+                "uncertain_items": [],
+            },
+            {
+                "region": "front_left",
+                "parts": [
+                    {
+                        # pillar_a_left — genuinely observed (real score), uncertain.
+                        "part_id": "pillar_a_left",
+                        "status": "uncertain",
+                        "damage_level": "unknown",
+                        "damage_type": [],
+                        "confidence": "low",
+                        "model_confidence_score": 0.5,
+                        "evidence_photo": ["photo_03"],
+                        "notes": "遮挡",
+                    }
+                ],
+                "uncertain_items": [],
+            },
+        ]
+        parts = {p["part_id"]: p for p in _run_pipeline(region_results, topology)}
+        pillar = parts["pillar_a_left"]
+        assert pillar["status"] == "damaged"
+        assert pillar["damage_level"] == "severe"
+
+
 class TestRule10RoofFrontPropagation:
     """Rule 10: Roof-front should be inferred damaged when front structural parts are severe."""
 

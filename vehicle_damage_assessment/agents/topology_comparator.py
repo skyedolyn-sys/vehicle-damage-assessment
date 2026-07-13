@@ -145,6 +145,32 @@ def _has_intact_origin_marker(part: PartActualState) -> bool:
     return False
 
 
+def _has_real_observation(part: PartActualState) -> bool:
+    """Return True if the part has at least one evidence source that is a REAL
+    observation, not a checklist backfill.
+
+    Rules 9/10/11 propagate structural damage only to parts that were actually
+    observed — their docstrings say "at least one evidence source (i.e. were
+    actually observed/assessed)".  But a checklist backfill (the model never
+    saw the part) also produces an evidence-source row, so ``evidence_sources``
+    non-empty is NOT a valid proxy for "was observed".  The backfill signal
+    used to be dropped at ``synthesizer._build_evidence_sources``; it now rides
+    through as the ``observed`` flag, and this helper is the single source of
+    truth for reading it.
+
+    A backfilled row (observed=False) means the model never saw the part, so it
+    must not satisfy the "has evidence" precondition — otherwise an unobserved
+    pillar gets cascade-promoted from a damaged neighbour (172852 pillar_b_right
+    systematic FP, promoted from pillar_a_right severe).  ``observed`` defaults
+    True for legacy entries that predate the marker.
+    """
+    sources = part.evidence_sources or []
+    return any(
+        isinstance(src, dict) and src.get("observed", True)
+        for src in sources
+    )
+
+
 def _has_source_status(part: PartActualState, status: str, regions: Set[str]) -> bool:
     """Return True if part has an evidence source with the given status in one of the regions."""
     canonical_regions = {canonicalize_view_id(r) for r in regions}
@@ -395,7 +421,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id.startswith("pillar_")
             and new_part.status in (Status.UNCERTAIN, Status.MISSING)
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: a part that the vision layer marked intact but then
             # downgraded to uncertain (positive-anchor / edge-visible rule) is
@@ -444,7 +470,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id == "roof_front"
             and new_part.status in (Status.INTACT, Status.UNCERTAIN)
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: do not flip an originally-intact part (downgraded
             # to uncertain by §2.1/§2.2) to damaged via front-corner inference.
@@ -480,7 +506,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id in ("roof_middle", "roof_rear")
             and new_part.status == Status.UNCERTAIN
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: do not flip an originally-intact part (downgraded
             # to uncertain by §2.1/§2.2) to damaged via neighbour inference.

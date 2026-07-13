@@ -553,7 +553,19 @@ REAR_CORE_STRUCTURAL_PARTS = load_part_profile("rear_core_structural")
 
 
 def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Build traceable evidence sources for each part conclusion."""
+    """Build traceable evidence sources for each part conclusion.
+
+    Each source carries an ``observed`` flag so downstream topology rules can
+    distinguish a REAL observation from a checklist backfill.  A backfilled
+    row (the model never saw the part) is marked by
+    ``model_confidence_score == 0.0`` — the exact backfill signature
+    (master_agent's consensus downgrade floors at 0.4 and never reaches 0.0,
+    so 0.0 is unambiguous).  Without this flag the backfill signal was dropped
+    here and the topology rules treated "evidence_sources non-empty" as
+    "was observed", cascade-promoting never-seen pillars (172852 pillar_b_right
+    systematic FP).  ``observed`` defaults True for legacy candidates that lack
+    the score entirely.
+    """
     sources: List[Dict[str, Any]] = []
     seen: set = set()
     for c in candidates:
@@ -570,6 +582,8 @@ def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, 
             "confidence": c.get("confidence", "low"),
             "evidence_photo": photos,
             "notes": c.get("notes", "").strip(),
+            # False only for checklist backfills (model never observed the part).
+            "observed": float(c.get("model_confidence_score", 1.0)) != 0.0,
         })
     return sources
 
