@@ -83,6 +83,38 @@ MUST_REMAIN_INTACT = [
 GROUND_TRUTH_DAMAGED_COUNT = 12  # 12 个 must_detect_damaged
 GROUND_TRUTH_TOTAL_PARTS = 31    # 12 damaged + 19 intact
 
+# ============================================================================
+# PER-PHOTO 人工判断 (用户对关键照片的上下文核对, 2026-07-12)
+# 仅作诊断参考, 不改变 rubric 的 damaged/intact 判定。
+# ============================================================================
+PHOTO_CONTEXT_NOTES = {
+    # 172852-24: 从右前门车顶高度俯拍车头。拍摄者站在打开的右前门与车身之间,
+    # 画面含前挡风玻璃(碎)、引擎盖、右前大灯/翼子板(毁)。右前门被打开。
+    # 注意: 此角度看不到右后视镜, 若模型报 mirror_right 属轻微误判。
+    "172852-24": {
+        "view": "front_right (右前门车顶高度俯拍车头)",
+        "front_door_open": True,
+        "visible": ["windshield_front", "hood", "headlight_front_right",
+                    "fender_front_right", "pillar_a_right"],
+        "note": "右前门打开, 拍摄者站门与车之间; 此角度看不到右后视镜",
+    },
+    # 172852-04: 清晰的 rear_right 3/4 照。车尾 Mercedes 标 + 尾灯 + 牌照框,
+    # 右侧车身(右后门打开/脱落、右后视镜、右后轮)。右后门明显受损。
+    "172852-04": {
+        "view": "rear_right (车尾 + 右侧车身 3/4)",
+        "visible": ["taillight_rear_right", "door_rear_right", "fender_rear_right",
+                    "pillar_c_right", "mirror_right"],
+        "note": "右后门打开/脱落, 损伤清楚; face_profiler 偶尔抖成 primary=None",
+    },
+    # 172852-29: 后挡风玻璃 + 右 C 柱特写。无明确车头/车尾锚点,
+    # 按规则应判 facing=unclear → camera_side=None → 右后门进不了候选集。
+    "172852-29": {
+        "view": "rear (后窗 + 右 C 柱特写)",
+        "visible": ["windshield_rear", "pillar_c_right", "roof_rear"],
+        "note": "特写无锚点, 稳定判 unclear; 右后门不在此画面",
+    },
+}
+
 
 # ============================================================================
 # 测试辅助函数

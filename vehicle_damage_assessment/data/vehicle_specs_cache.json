@@ -2122,50 +2122,5 @@
     "headlight_layout": "separate",
     "rear_door_type": "tailgate",
     "notes": "微型面包车，实用造型，无天窗，侧滑门+对开尾门"
-  },
-  "蔚来|es8|2019": {
-    "body_style": "suv",
-    "doors": 5,
-    "has_sunroof": true,
-    "has_roof_rack": false,
-    "headlight_layout": "split",
-    "rear_door_type": "tailgate",
-    "notes": "全尺寸纯电动7座SUV，采用X-Bar家族前脸设计，分体式LED大灯，封闭式前格栅，车顶为大面积全景天窗，隐藏式电动门把手，无框车门设计，车身侧面集成侧视摄像头"
-  },
-  "||": {
-    "body_style": "sedan",
-    "doors": 4,
-    "has_sunroof": false,
-    "has_roof_rack": false,
-    "headlight_layout": "separate",
-    "rear_door_type": "trunk_lid",
-    "notes": "用户未提供车型信息，以下内容按通用三厢轿车默认特征处理，仅供参考。实际车辆可能为 SUV、MPV、Hatchback 等其他车型，请结合照片实际外观重新校准。"
-  },
-  "保时捷|panamera|2021": {
-    "body_style": "sedan",
-    "doors": 4,
-    "has_sunroof": true,
-    "has_roof_rack": false,
-    "headlight_layout": "separate",
-    "rear_door_type": "tailgate",
-    "notes": "四门大型豪华运动轿车，采用fastback快背式车身设计，后部为整体掀背尾门（liftback）。2021款为中期改款（facelift）车型，前脸与尾部均经过重新设计。标配矩阵式LED大灯（Matrix LED），可选装全景天窗。无行李架，配备无框车门。"
-  },
-  "保时捷|panamera|2020": {
-    "body_style": "sedan",
-    "doors": 4,
-    "has_sunroof": false,
-    "has_roof_rack": false,
-    "headlight_layout": "separate",
-    "rear_door_type": "trunk_lid",
-    "notes": ""
-  },
-  "nio|es8|2019": {
-    "body_style": "suv",
-    "doors": 5,
-    "has_sunroof": true,
-    "has_roof_rack": false,
-    "headlight_layout": "split",
-    "rear_door_type": "tailgate",
-    "notes": "纯电动全尺寸7座SUV，X-Bar前脸，分体式大灯，心跳式尾灯，悬浮式车顶，隐藏式门把手，前翼子板设有充电口（左侧慢充、右侧快充）"
   }
 }

@@ -37,6 +37,22 @@ def make_cache_key(vehicle_info: Dict[str, Any]) -> str:
     return f"{brand}|{model}|{year}"
 
 
+def is_cacheable_key(vehicle_info: Dict[str, Any]) -> bool:
+    """Return True only when brand AND model are both present.
+
+    An empty/blank vehicle_info collapses to the shared ``"||"`` bucket.  Caching
+    under that bucket is unsafe: any default-sedan write (or a mis-detected
+    vehicle) would be served back to *every* subsequent vehicle-info-less sample,
+    silently poisoning unrelated cars (e.g. a Mercedes GLC read as a sedan).
+
+    When brand or model is missing we bypass the cache entirely and let the LLM
+    infer specs fresh each time — no shared bucket, no cross-sample pollution.
+    """
+    brand = str(vehicle_info.get("brand", "")).strip()
+    model = str(vehicle_info.get("model", "")).strip()
+    return bool(brand) and bool(model)
+
+
 def _load_json_cache() -> Dict[str, Any]:
     """Read the legacy cache file into a dict."""
     if not CACHE_FILE.exists():
@@ -85,7 +101,11 @@ def get_cached_specs(vehicle_info: Dict[str, Any]) -> Optional[VehicleSpecs]:
     """Return cached VehicleSpecs for *vehicle_info*, or None if not cached.
 
     Tries the Django ORM first, then falls back to the legacy JSON file.
+    Refuses to read the shared empty (``"||"``) bucket — see is_cacheable_key.
     """
+    if not is_cacheable_key(vehicle_info):
+        return None
+
     orm_specs = _get_orm_specs(vehicle_info)
     if orm_specs is not None:
         return orm_specs
@@ -105,7 +125,11 @@ def save_cached_specs(vehicle_info: Dict[str, Any], specs: VehicleSpecs) -> None
     """Store *specs* in the persistent cache keyed by *vehicle_info*.
 
     Saves to both the Django ORM (if available) and the legacy JSON file.
+    Refuses to write the shared empty (``"||"``) bucket — see is_cacheable_key.
     """
+    if not is_cacheable_key(vehicle_info):
+        return
+
     key = make_cache_key(vehicle_info)
     specs_dict = specs.to_dict()
 

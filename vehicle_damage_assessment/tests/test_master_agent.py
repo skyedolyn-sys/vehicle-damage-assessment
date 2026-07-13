@@ -4,11 +4,107 @@ from unittest.mock import AsyncMock, patch
 from agents.master_agent import (
     _extract_photo_classifications,
     _aggregate_part_evidence,
+    _apply_facing_consensus,
+    _part_side,
     _boost_confidence,
     _build_region_results,
     master_assessment_agent,
 )
 from models.part_state import PartActualState, Status
+
+
+def _prior(pid, facing="front", camera_side=None, usable=True):
+    """Minimal face_prior for facing-consensus tests."""
+    return {
+        "photo_id": pid,
+        "facing": facing,
+        "camera_side": camera_side,
+        "usable": usable,
+    }
+
+
+def _view_result(pid, damaged_part_ids):
+    """Minimal view_result with the given damaged part ids."""
+    return {
+        "photo_id": pid,
+        "parts": [
+            {"part_id": p, "status": "damaged", "confidence": "high",
+             "model_confidence_score": 0.85}
+            for p in damaged_part_ids
+        ],
+    }
+
+
+def test_part_side():
+    assert _part_side("door_front_left") == "left"
+    assert _part_side("pillar_a_right") == "right"
+    assert _part_side("hood") == "center"
+    assert _part_side("windshield_front") == "center"
+
+
+def test_facing_consensus_downgrades_contradictory_low_conf_damage():
+    # High-conf photos put their damage on the RIGHT side.
+    priors = {
+        "a": _prior("a", camera_side="right", usable=True),
+        "b": _prior("b", camera_side="right", usable=True),
+        # low-conf close-up: its (mis-faced) damage landed on the LEFT side.
+        "c": _prior("c", facing="unclear", camera_side=None, usable=False),
+    }
+    results = [
+        _view_result("a", ["pillar_a_right", "door_front_right"]),
+        _view_result("b", ["fender_front_right"]),
+        _view_result("c", ["pillar_a_left"]),  # contradicts consensus side
+    ]
+    _apply_facing_consensus(priors, results)
+    c_obs = results[2]["parts"][0]
+    assert c_obs["confidence"] == "low"
+    assert c_obs["_consensus_downgraded"] is True
+
+
+def test_facing_consensus_keeps_consistent_low_conf_damage():
+    # Consensus side is right; the low-conf photo's right-side damage is
+    # self-consistent, so it is rescued (NOT downgraded).
+    priors = {
+        "a": _prior("a", camera_side="right", usable=True),
+        "c": _prior("c", facing="unclear", camera_side=None, usable=False),
+    }
+    results = [
+        _view_result("a", ["pillar_a_right"]),
+        _view_result("c", ["door_rear_right"]),  # consistent with consensus
+    ]
+    _apply_facing_consensus(priors, results)
+    c_obs = results[1]["parts"][0]
+    assert c_obs["confidence"] == "high"
+    assert "_consensus_downgraded" not in c_obs
+
+
+def test_facing_consensus_ignores_center_parts():
+    priors = {
+        "a": _prior("a", camera_side="right", usable=True),
+        "c": _prior("c", facing="unclear", camera_side=None, usable=False),
+    }
+    results = [
+        _view_result("a", ["pillar_a_right"]),
+        _view_result("c", ["hood", "windshield_front"]),  # center: no side signal
+    ]
+    _apply_facing_consensus(priors, results)
+    for obs in results[1]["parts"]:
+        assert obs["confidence"] == "high"
+        assert "_consensus_downgraded" not in obs
+
+
+def test_facing_consensus_leaves_usable_photos_alone():
+    priors = {
+        "a": _prior("a", camera_side="right", usable=True),
+        # usable photo even though its damage is on the other side — trusted.
+        "b": _prior("b", camera_side="left", usable=True),
+    }
+    results = [
+        _view_result("a", ["pillar_a_right"]),
+        _view_result("b", ["door_front_left"]),
+    ]
+    _apply_facing_consensus(priors, results)
+    assert results[1]["parts"][0]["confidence"] == "high"
 
 
 def test_extract_photo_classifications_new_schema():

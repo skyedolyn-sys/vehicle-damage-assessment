@@ -559,6 +559,82 @@ class TestSynthesizerRoofRules:
         part = next(p for p in result["parts"] if p["part_id"] == "sunroof_glass")
         assert part["status"] == "uncertain"
 
+    def test_sunroof_backfill_uncertain_does_not_dilute_real_damaged(self):
+        """Face-path backfill placeholders (score 0.0) must not flip a real
+        top-view damaged verdict to uncertain/intact."""
+        backfill = {
+            "part_id": "sunroof_glass",
+            "status": "uncertain",
+            "damage_level": "unknown",
+            "damage_type": ["none"],
+            "confidence": "low",
+            "model_confidence_score": 0.0,
+            "notes": "该部件在照片中未被识别到，按面占比候选清单补齐为uncertain",
+        }
+        region_results = [
+            {
+                "region": "top",
+                "parts": [
+                    {
+                        "part_id": "sunroof_glass",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["crack"],
+                        "confidence": "high",
+                        "model_confidence_score": 0.9,
+                        "evidence_photo": ["photo_top"],
+                        "notes": "天窗玻璃破碎",
+                    },
+                    dict(backfill),
+                    dict(backfill),
+                ],
+                "uncertain_items": [],
+            },
+            {
+                "region": "front_right",
+                "parts": [
+                    {
+                        "part_id": "sunroof_glass",
+                        "status": "damaged",
+                        "damage_level": "severe",
+                        "damage_type": ["crack"],
+                        "confidence": "medium",
+                        "model_confidence_score": 0.6,
+                        "evidence_photo": ["photo_fr"],
+                        "notes": "天窗区域塌陷",
+                    },
+                    dict(backfill),
+                ],
+                "uncertain_items": [],
+            },
+        ]
+        result = synthesizer_agent(region_results)
+        part = next(p for p in result["parts"] if p["part_id"] == "sunroof_glass")
+        assert part["status"] == "damaged"
+
+    def test_roof_rear_backfill_only_does_not_become_intact(self):
+        """When every observation is a backfill placeholder, the part must stay
+        uncertain rather than being misread as intact."""
+        backfill = {
+            "part_id": "roof_rear",
+            "status": "uncertain",
+            "damage_level": "unknown",
+            "damage_type": ["none"],
+            "confidence": "low",
+            "model_confidence_score": 0.0,
+            "notes": "该部件在照片中未被识别到，按面占比候选清单补齐为uncertain",
+        }
+        region_results = [
+            {
+                "region": "rear",
+                "parts": [dict(backfill), dict(backfill)],
+                "uncertain_items": [],
+            }
+        ]
+        result = synthesizer_agent(region_results)
+        part = next(p for p in result["parts"] if p["part_id"] == "roof_rear")
+        assert part["status"] == "uncertain"
+
     def test_roof_rear_from_secondary_only_capped(self):
         region_results = [
             {

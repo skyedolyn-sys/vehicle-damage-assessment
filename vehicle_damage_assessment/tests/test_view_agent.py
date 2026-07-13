@@ -91,6 +91,64 @@ def test_normalize_part_observation_unknown_part_dropped():
     assert _normalize_part_observation(part, "p1") is None
 
 
+def test_normalize_result_alias_maps_free_form_names():
+    """Free-form LLM names resolve to canonical ids via the alias table."""
+    raw = {
+        "view_detections": [],
+        "primary_view": "rear",
+        "parts": [
+            {"part_id": "sunroof", "status": "damaged", "damage_level": "severe",
+             "damage_types": ["shatter"], "confidence": "high"},
+            {"part_id": "panoramic_sunroof_glass", "status": "damaged",
+             "damage_level": "severe", "damage_types": ["shatter"], "confidence": "high"},
+            {"part_id": "hood_front", "status": "intact", "damage_level": "none",
+             "damage_types": ["none"], "confidence": "high"},
+        ],
+    }
+    result = _normalize_view_agent_result("p1", raw)
+    kept = {p["part_id"] for p in result["parts"]}
+    assert "sunroof_glass" in kept
+    assert "hood" in kept
+    assert result["unmapped_parts"] == []
+
+
+def test_normalize_result_collects_unmapped_unknown_and_out_of_candidate():
+    """Unknown and out-of-candidate parts are traced, not silently dropped."""
+    raw = {
+        "view_detections": [],
+        "primary_view": "rear",
+        "parts": [
+            {"part_id": "pillar_d_right", "status": "damaged", "damage_level": "moderate"},
+            {"part_id": "door_rear_right", "status": "damaged", "damage_level": "severe"},
+            {"part_id": "roof_rear", "status": "damaged", "damage_level": "moderate"},
+        ],
+    }
+    result = _normalize_view_agent_result(
+        "p1", raw, candidate_parts={"door_rear_right"}
+    )
+    kept = {p["part_id"] for p in result["parts"]}
+    assert kept == {"door_rear_right"}
+
+    by_reason = {u["drop_reason"]: u for u in result["unmapped_parts"]}
+    assert by_reason["unknown_part_id"]["raw_name"] == "pillar_d_right"
+    assert by_reason["out_of_candidate"]["raw_name"] == "roof_rear"
+    assert by_reason["out_of_candidate"]["resolved_part_id"] == "roof_rear"
+
+
+def test_normalize_result_part_name_fallback_maps_chinese_free_text():
+    """An observation keyed only by part_name still goes through alias mapping."""
+    raw = {
+        "view_detections": [],
+        "primary_view": "front",
+        "parts": [
+            {"part_name": "hood_front", "status": "intact", "damage_level": "none",
+             "damage_types": ["none"], "confidence": "high"},
+        ],
+    }
+    result = _normalize_view_agent_result("p1", raw)
+    assert {p["part_id"] for p in result["parts"]} == {"hood"}
+
+
 @pytest.mark.asyncio
 async def test_backfill_missing_parts_for_primary_view():
     fake_json = {
