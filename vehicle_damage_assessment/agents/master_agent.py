@@ -659,6 +659,13 @@ def _build_region_results(
                 "confidence": obs.get("confidence", "low"),
                 "evidence_photo": obs.get("evidence_photo", result.get("photo_id")),
                 "notes": obs.get("description", ""),
+                # Carry the model's self-reported confidence score so the
+                # synthesizer can distinguish a checklist backfill (score 0.0 —
+                # the model never observed the part) from a real observation.
+                # Without this the backfill signal was dropped at this boundary
+                # and topology Rules 9-11 could not tell a backfill from a real
+                # observation (172852 pillar_b_right systematic FP).
+                "model_confidence_score": obs.get("model_confidence_score", 1.0),
                 "_region": primary_view,
                 "_aggregated_status": evidence.get("aggregated_status"),
                 "_aggregated_confidence": evidence.get("aggregated_confidence"),
