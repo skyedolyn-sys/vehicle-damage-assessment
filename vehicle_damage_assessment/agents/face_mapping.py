@@ -72,22 +72,27 @@ def _higher_coverage(current: str, candidate: str) -> str:
 #: corroborated or upgraded when a real roof/top observation exists).
 _ROOF_OBLIQUE_FACES = ("front", "rear", "side", "left", "right")
 
-#: Rear-side structural parts (C-pillar, rear door, rear fender) are physically
-#: at the back of the vehicle, so a rear close-up reveals them even when the
-#: camera side is not locked.  Symmetrically, front-side parts (A-pillar, front
-#: door, front fender) show in a front close-up.  When the rear (resp. front)
-#: face is visible but ``camera_side`` is unknown, we admit BOTH the left and
-#: right members of these pairs at ``glimpse`` coverage — the observation is
-#: preserved, and the cross-photo facing consensus (master_agent) decides which
-#: side actually carries the damage.  This stops a side-unlocked rear close-up
-#: (e.g. a rear-windshield + C-pillar crop) from silently losing a real
-#: rear-door / C-pillar observation just because the facing was unclear.
-_REAR_SIDE_PARTS = {
-    p["part_id"] for p in PARTS_CATALOG if p["side"] in ("rear_left", "rear_right")
-}
-_FRONT_SIDE_PARTS = {
-    p["part_id"] for p in PARTS_CATALOG if p["side"] in ("front_left", "front_right")
-}
+#: Front-side / rear-side structural pairs (A-pillar, C-pillar, side doors,
+#: side fender) are geometrically invisible from a side-unlocked front/rear
+#: head-on view — the camera only sees the front/rear face.  Earlier code
+#: admitted them at ``glimpse`` whenever the front/rear face was visible, which
+#: surfaced pillar_a_left / pillar_b_left / pillar_c_left / trunk_lid /
+#: windshield_rear / bumper_rear as candidates to the ViewAgent prompt and
+#: produced confident-but-false "damaged" verdicts (172852 geometry audit).
+#: Tier 1 fix: admit only when the camera side is locked, and only the
+#: matching side's pair.
+def _parts_by_side(sides: tuple[str, ...]) -> dict[str, set[str]]:
+    """Group PARTS_CATALOG part_ids whose ``side`` field is in ``sides``,
+    keyed by the trailing side token ("left"/"right")."""
+    out: dict[str, set[str]] = {"left": set(), "right": set()}
+    for p in PARTS_CATALOG:
+        if p["side"] in sides:
+            out[p["side"].rsplit("_", 1)[-1]].add(p["part_id"])
+    return out
+
+
+_FRONT_SIDE_PARTS_BY_SIDE = _parts_by_side(("front_left", "front_right"))
+_REAR_SIDE_PARTS_BY_SIDE = _parts_by_side(("rear_left", "rear_right"))
 
 
 def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
@@ -103,46 +108,52 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
     entirely at garage eye-level (no top-down photo) would never admit any roof
     part, and correctly-observed roof damage would be dropped as out-of-scope.
 
-    Front-side / rear-side structural pairs additionally enter at ``glimpse``
-    when the front / rear face is visible but the camera side is not locked, so
-    a side-unlocked close-up keeps its C-pillar / rear-door observation and lets
-    the facing consensus resolve the side instead of dropping it.
+    Front-side / rear-side structural pairs only admit at ``glimpse`` when
+    BOTH the front/rear face AND the corresponding side are visible (camera
+    side locked).  Without a locked side, the camera only sees a head-on
+    front/rear view and the side structural pairs are geometrically out of
+    view — admitting them produced confident-but-false "damaged" verdicts
+    for pillar_a_left / pillar_a_right / pillar_b_* / pillar_c_* /
+    trunk_lid / windshield_rear / bumper_rear in the 172852 audit.
     """
     face_coverage = {
         f.get("face"): f.get("coverage")
         for f in visible_faces
         if f.get("face") and f.get("coverage")
     }
-    # True if the camera looks down at the vehicle from an oblique angle, in
-    # which case the roof surface is at least partially visible.
     roof_obliquely_visible = any(f in face_coverage for f in _ROOF_OBLIQUE_FACES)
-    # A locked left/right face means the side is already resolved; only when NO
-    # side face is present do we admit front/rear-side pairs symmetrically and
-    # defer the side to the facing consensus.
-    side_locked = any(f in face_coverage for f in ("left", "right"))
+    locked_side: Optional[str] = "left" if "left" in face_coverage else (
+        "right" if "right" in face_coverage else None
+    )
     front_visible = "front" in face_coverage
     rear_visible = "rear" in face_coverage
+    # Admit structural pairs from the front/rear face only when the matching
+    # side is also visible; otherwise the camera only sees the head-on face.
+    front_side_cands = (
+        _FRONT_SIDE_PARTS_BY_SIDE.get(locked_side or "", set())
+        if front_visible and locked_side else set()
+    )
+    rear_side_cands = (
+        _REAR_SIDE_PARTS_BY_SIDE.get(locked_side or "", set())
+        if rear_visible and locked_side else set()
+    )
+    side_unlocked_front = front_visible and not locked_side
+    side_unlocked_rear = rear_visible and not locked_side
 
     result: dict[str, str] = {}
     for part in PARTS_CATALOG:
         part_id = part["part_id"]
         coverage = face_coverage.get(part["part_category"])
         if coverage is None:
-            # Roof parts are also seen from elevated oblique angles.
             if part["part_category"] == "roof" and roof_obliquely_visible:
                 coverage = "glimpse"
-            # Front/rear-side structural pairs show in a front/rear close-up
-            # even without a locked side — admit both, defer side to consensus.
-            elif not side_locked and front_visible and part_id in _FRONT_SIDE_PARTS:
-                coverage = "glimpse"
-            elif not side_locked and rear_visible and part_id in _REAR_SIDE_PARTS:
+            elif side_unlocked_front or side_unlocked_rear:
+                continue  # head-on view: skip side structural pairs
+            elif part_id in front_side_cands or part_id in rear_side_cands:
                 coverage = "glimpse"
             else:
                 continue
-        if part_id in result:
-            result[part_id] = _higher_coverage(result[part_id], coverage)
-        else:
-            result[part_id] = coverage
+        result[part_id] = _higher_coverage(result[part_id], coverage) if part_id in result else coverage
     return result
 
 

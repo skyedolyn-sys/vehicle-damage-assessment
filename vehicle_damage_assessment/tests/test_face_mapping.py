@@ -121,27 +121,66 @@ def test_parts_for_faces_roof_real_roof_face_wins_over_glimpse():
         assert result[pid] == "partial"
 
 
-def test_parts_for_faces_rear_closeup_admits_rear_side_pairs_side_unlocked():
-    """A rear close-up with no locked side admits rear-side pairs (both sides)."""
+def test_parts_for_faces_rear_closeup_no_side_drops_rear_side_pairs():
+    """A rear close-up with no locked side does NOT admit rear-side pairs.
+
+    172852 geometry audit: the legacy ``both sides admit for consensus``
+    fallback let ``pillar_c_left`` / ``trunk_lid`` / ``windshield_rear`` /
+    ``bumper_rear`` enter the candidate set as ``glimpse`` in a side-unlocked
+    rear view, which surfaced them to the ViewAgent prompt and produced
+    confident-but-false "damaged" verdicts in the evidence chain.  The Tier 1
+    fix requires the camera_side to be locked before any front-side or
+    rear-side structural pair is admitted — geometry, not consensus.
+    """
     result = parts_for_faces([{"face": "rear", "coverage": "dominant"}])
-    # Both C-pillars and both rear doors enter at glimpse for consensus to resolve.
     for pid in ("pillar_c_left", "pillar_c_right", "door_rear_left", "door_rear_right"):
-        assert pid in result, f"{pid} should be a candidate in a rear close-up"
-        assert result[pid] == "glimpse"
-    # Front-side parts must NOT leak into a rear view.
-    assert "door_front_right" not in result
-    assert "pillar_a_left" not in result
+        assert pid not in result, (
+            f"{pid} should NOT be a candidate in a side-unlocked rear view; "
+            f"the camera cannot resolve which side of the vehicle it sees."
+        )
+    # Roof parts still get the oblique fallback (a rear shot tilts up to roof).
+    for pid in ("roof_rear", "roof_middle"):
+        assert pid in result
 
 
-def test_parts_for_faces_front_closeup_admits_front_side_pairs_side_unlocked():
-    """A front close-up with no locked side admits front-side pairs (both sides)."""
+def test_parts_for_faces_front_closeup_no_side_drops_front_side_pairs():
+    """A front close-up with no locked side does NOT admit front-side pairs.
+
+    Mirror of the rear case: a head-on front view cannot see the A-pillars'
+    front surfaces; admitting them at ``glimpse`` previously caused
+    ``pillar_a_left`` / ``pillar_a_right`` / ``fender_front_*`` FPs.
+    """
     result = parts_for_faces([{"face": "front", "coverage": "dominant"}])
     for pid in ("pillar_a_left", "pillar_a_right", "door_front_left", "door_front_right"):
-        assert pid in result
-        assert result[pid] == "glimpse"
-    # Rear-side parts must NOT leak into a front view.
-    assert "door_rear_right" not in result
-    assert "pillar_c_left" not in result
+        assert pid not in result, (
+            f"{pid} should NOT be a candidate in a side-unlocked front view; "
+            f"the camera only sees the front face head-on."
+        )
+    # Front-only parts and roof still get in.
+    assert result["hood"] == "dominant"
+    assert "roof_front" in result
+
+
+def test_parts_for_faces_front_closeup_locked_side_admits_only_that_side():
+    """A front close-up WITH a locked side admits only the matching side's
+    front-side pair (Tier 1 positive case)."""
+    result_right = parts_for_faces([
+        {"face": "front", "coverage": "dominant"},
+        {"face": "right", "coverage": "dominant"},
+    ])
+    assert result_right["door_front_right"] == "dominant"
+    assert "door_front_left" not in result_right
+    assert result_right["pillar_a_right"] == "dominant"
+    assert "pillar_a_left" not in result_right
+
+    result_left = parts_for_faces([
+        {"face": "front", "coverage": "dominant"},
+        {"face": "left", "coverage": "dominant"},
+    ])
+    assert result_left["door_front_left"] == "dominant"
+    assert "door_front_right" not in result_left
+    assert result_left["pillar_a_left"] == "dominant"
+    assert "pillar_a_right" not in result_left
 
 
 def test_parts_for_faces_side_locked_does_not_admit_opposite_side():
@@ -252,15 +291,11 @@ def test_build_face_prior_centered_rear_no_side():
     prior = build_face_prior("photo_002", profile)
     assert prior["camera_side"] is None
     assert prior["assignable_faces"] == ["rear"]
+    # Tier 1 fix: side-unlocked rear close-up does NOT admit rear-side pairs.
+    # Only the rear face itself + roof (oblique fallback) are in cands.
     rear_parts = {p["part_id"] for p in PARTS_CATALOG if p["part_category"] == "rear"}
-    # rear is an elevated oblique face, so roof parts are also admitted (glimpse).
     roof_parts = {p["part_id"] for p in PARTS_CATALOG if p["part_category"] == "roof"}
-    # rear close-up with no locked side also admits rear-side structural pairs
-    # (C-pillar, rear door, rear fender) on BOTH sides, deferred to consensus.
-    rear_side_parts = {
-        p["part_id"] for p in PARTS_CATALOG if p["side"] in ("rear_left", "rear_right")
-    }
-    assert set(prior["candidate_parts"]) == rear_parts | roof_parts | rear_side_parts
+    assert set(prior["candidate_parts"]) == rear_parts | roof_parts
 
 
 def test_build_face_prior_side_naming_overridden_by_camera_side():
