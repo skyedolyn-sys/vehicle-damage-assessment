@@ -9,10 +9,15 @@ aliases:
     synonyms:
       - front_hood
       - engine_hood
+      - hood_front
+      - bonnet
   grille_front:
     synonyms:
       - front_grille
       - grille
+      - grille_upper
+      - front_grille_upper
+      - upper_grille
   headlight_front_left:
     synonyms:
       - left_front_headlight
@@ -133,12 +138,31 @@ aliases:
       - right_c_pillar
       - c_pillar_right
   roof_front:
-    synonyms: []
+    synonyms:
+      - front_roof
+      - roof_front_section
   roof_middle:
-    synonyms: []
+    synonyms:
+      - middle_roof
+      - roof_center
+      - centre_roof
   roof_rear:
-    synonyms: []
+    synonyms:
+      - rear_roof
+      - roof_rear_section
+      - back_roof
   sunroof_glass:
-    synonyms: []
+    synonyms:
+      - sunroof
+      - panoramic_sunroof_glass
+      - panoramic_sunroof
+      - sunroof_glass_panel
+      - moonroof
+      - panoramic_roof
   roof_rack:
-    synonyms: []
+    synonyms:
+      - roof_rack_cross_bar
+      - roof_rail_left
+      - roof_rail_right
+      - roof_rails
+      - roof_rack_crossbar

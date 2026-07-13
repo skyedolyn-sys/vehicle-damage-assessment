@@ -350,6 +350,54 @@ def fuse_evidence(
             for c in damaged + missing
             if _view_priority(part_id, c.get("_origin_view", "")) > 1
         )
+        # 172852 FP fix: a multi-view "not damaged" consensus is strong evidence
+        # the part is genuinely undamaged.  The consensus counts BOTH intact
+        # observations AND genuinely-observed uncertain ones (a real uncertain
+        # verdict means the model looked and could not confirm damage), but
+        # excludes checklist backfills (model never observed the part — those
+        # carry model_confidence_score == 0.0 and no signal either way).
+        #
+        # Only a HIGH-confidence damaged signal may override a >=2-view
+        # consensus — a single low/medium-confidence damaged observation
+        # (common at 1024px, where the model over-reads reflections and panel
+        # gaps) must not flip a part that two or more views agree is not
+        # damaged.
+        def _is_backfill(c: Dict[str, Any]) -> bool:
+            if c.get("status") != "uncertain":
+                return False
+            if float(c.get("model_confidence_score", 1.0)) == 0.0:
+                return True
+            txt = (c.get("description") or "") + (c.get("notes") or "")
+            return "按视角清单补齐" in txt
+
+        real_uncertain = [c for c in uncertain if not _is_backfill(c)]
+        not_damaged_consensus = len(intact) + len(real_uncertain)
+        has_high_conf_damage = any(
+            c.get("confidence") == "high" for c in damaged + missing
+        )
+        if not_damaged_consensus >= 2 and not has_high_conf_damage:
+            # Return the not-damaged consensus rather than the damaged outlier.
+            # Prefer a concrete intact verdict when one exists, else uncertain.
+            if intact:
+                best = primary_intact[0] if primary_intact else intact[0]
+                status, level = "intact", "none"
+                pool = intact
+            else:
+                best = real_uncertain[0]
+                status, level = "uncertain", "unknown"
+                pool = real_uncertain
+            return {
+                "status": status,
+                "damage_level": level,
+                "damage_type": [],
+                "confidence": "medium",
+                "evidence_photo": list(dict.fromkeys(
+                    p for c in pool for p in _as_photo_list(c.get("evidence_photo")) if p
+                )),
+                "_origin_view": best.get("_origin_view", ""),
+                "_fused": True,
+                "_policy_override": "not_damaged_consensus_over_damaged_outlier",
+            }
         # §4.1: 高敏感部件 severe 信号永远穿透,即便 primary-intact 是 high confidence。
         if is_high_sensitivity and any(c.get("damage_level") == "severe" for c in damaged + missing):
             for c in damaged + missing:

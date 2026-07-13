@@ -47,10 +47,11 @@ async def assessment_orchestrator(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = False,
 ) -> Dict[str, Any]:
     """Run the full assessment workflow and return the legacy result dict."""
     final_event = None
-    async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan):
+    async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan, use_face_path=use_face_path):
         if event.get("type") == "final":
             final_event = event
     if final_event is None:
@@ -62,13 +63,14 @@ async def assessment_orchestrator_stream(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream assessment workflow events.
 
     Currently yields only a ``final`` event.  Fine-grained progress events
     can be added once MasterAgent supports streaming.
     """
-    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan):
+    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan, use_face_path=use_face_path):
         yield event
 
 
@@ -76,11 +78,12 @@ async def _assessment_orchestrator_impl(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Delegate to MasterAgent and adapt its output to the legacy shape."""
     from agents.view_mapping import NON_EXTERIOR_VIEWS
 
-    assessment = await master_assessment_agent(files, vehicle_info, plan=plan)
+    assessment = await master_assessment_agent(files, vehicle_info, plan=plan, use_face_path=use_face_path)
     assessment_result = assessment.to_legacy_result()
     plan = getattr(assessment, "_plan", plan) or {}
 

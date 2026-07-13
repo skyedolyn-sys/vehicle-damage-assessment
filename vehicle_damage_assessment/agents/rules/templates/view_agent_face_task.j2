@@ -1,0 +1,50 @@
+请分析这张车辆外观照片，识别可见部件的损伤状态。
+
+## 本照片的相机朝向已由前置分析确定（你不需要、也不允许重新判断朝向或左右）
+
+- 相机看到的车身大方向（facing）：[[ facing ]]
+- 相机看到的车身侧（camera_side）：[[ camera_side ]]
+- 定位锚点：[[ anchor ]]
+
+{% if camera_side %}
+**左右已锁定**：这张照片看到的侧面是车辆的【[[ camera_side ]]】侧。所有带 `_left` / `_right` 后缀的部件，其左右归属已由 camera_side 决定，你**不得**翻转、不得改判。屏幕左/右不等于车辆左/右，这一点已由前置分析处理完毕，你无需再做镜面翻转推理。
+{% else %}
+本照片未确定单一车身侧（正对车头/车尾、侧面占满、车顶或局部特写）。请只评估下方候选部件清单里的部件，不要臆测左右。
+{% endif %}
+
+## 只允许评估以下候选部件（这是本照片能可靠归面的部件范围）
+
+`part_id` 必须**逐字**使用下表左列的规范 id，不得自造、不得简写（例如必须写 `windshield_front` 而不是 `windshield`，必须写 `roof_front` 而不是 `roof`）：
+
+{% for part_id, part_name in candidate_parts_named -%}
+- `{{ part_id }}` = {{ part_name }}
+{% endfor %}
+
+**严禁**评估清单之外的任何部件，**严禁**使用上表以外的 part_id。即使你在画面里"觉得"看到了别的部件，也不要输出——那些部件要么不在本照片可归属的面上，要么属于另一侧，强行判定会造成左右归属错误。
+
+## 损伤判定要求
+
+- `status`: intact / damaged / missing / uncertain
+- `damage_level`: none / light / moderate / severe / unknown
+- `damage_types`: scratch / dent / deformation / crack / breakage / paint_loss / corrosion（可多选，none 也算）
+- `confidence`: high / medium / low
+- 每个 damaged 部件的 `description` 必须含**具体位置**（如"右A柱顶部""右后门中部"），但**不要**写 camera_position / 镜面翻转推导——朝向与左右已由前置确定。
+- 部件权重（coverage）：{% for pid, cov in candidate_parts.items() %}{{ pid }}={{ cov }}{% if not loop.last %}, {% endif %}{% endfor %}
+  - dominant/partial 面的部件：正常判定损伤。
+  - glimpse 面的部件：该面只露一角，**不得单独据此定 severe**；若仅 glimpse 面证据，最高判 moderate 且 confidence 不高于 medium。
+
+## 本次任务
+- photo_id: [[ photo_id ]]
+- 车型信息：[[ vehicle_name ]]
+
+## 输出格式（只输出一个合法 JSON 对象）
+
+```json
+{
+  "parts": [
+    {"part_id": "pillar_a_right", "status": "damaged", "damage_level": "severe", "damage_types": ["deformation"], "confidence": "high", "model_confidence_score": 0.85, "description": "右A柱顶部严重变形"}
+  ]
+}
+```
+
+只输出 JSON，不要额外文字。只评估候选清单内的部件。

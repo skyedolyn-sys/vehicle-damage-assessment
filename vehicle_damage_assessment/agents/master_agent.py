@@ -20,6 +20,8 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents.minimax_client import build_image_content
+from agents.face_mapping import build_face_prior
+from agents.face_profiler import face_profiler_agent
 from agents.planner_agent import planner_agent
 from agents.reviewer_subagent import reviewer_subagent
 from agents.synthesizer import synthesizer_agent
@@ -51,8 +53,21 @@ async def master_assessment_agent(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Optional[Dict[str, Any]] = None,
+    use_face_path: bool = False,
 ) -> DamageAssessment:
     """Run the full assessment pipeline using the ViewAgent Team architecture.
+
+    Parameters
+    ----------
+    use_face_path:
+        When ``False`` (default) the legacy path is preserved unchanged: each
+        ViewAgent self-derives its camera view and applies the Step B flip.
+        When ``True`` the new face path is used: a ``face_profiler`` first
+        determines each photo's facing + visible-face coverage, deterministic
+        ``face_mapping`` flips that into a locked ``camera_side`` and a
+        candidate part set, and ViewAgent then only assesses damage inside
+        that set (no self-facing, no flip).  This removes the left/right
+        mirror-flip failure mode at the root.
 
     Parameters
     ----------
@@ -88,19 +103,84 @@ async def master_assessment_agent(
     ]
     logger.info("[master] exterior photos=%d total=%d", len(exterior_photos), len(files))
 
+    # 3b. (face path only) Profile each exterior photo's facing + face coverage,
+    # then deterministically derive a locked camera_side + candidate part set.
+    face_priors: Dict[str, Dict[str, Any]] = {}
+    if use_face_path and exterior_photos:
+        profiles = await face_profiler_agent(exterior_photos, vehicle_prior)
+        for prof in profiles:
+            pid = prof.get("photo_id")
+            if pid:
+                face_priors[pid] = build_face_prior(pid, prof)
+        logger.info(
+            "[master] face path: profiled %d photos, %d with a locked camera_side, %d usable",
+            len(face_priors),
+            sum(1 for fp in face_priors.values() if fp.get("camera_side")),
+            sum(1 for fp in face_priors.values() if fp.get("usable")),
+        )
+
     # 4. Dispatch ViewAgent Team in parallel
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
     async def _run_one(photo: Dict[str, Any]) -> Dict[str, Any]:
         async with semaphore:
             try:
-                return await view_agent(photo, vehicle_prior)
+                prior = face_priors.get(photo.get("id")) if use_face_path else None
+                return await view_agent(photo, vehicle_prior, face_prior=prior)
             except Exception as exc:
                 logger.warning("[master] view_agent failed for photo_id=%s: %s", photo.get("id"), exc)
                 return {"photo_id": photo.get("id"), "primary_view": None, "view_detections": [], "parts": []}
 
     view_results = await asyncio.gather(*[_run_one(p) for p in exterior_photos])
-    view_results = [r for r in view_results if r.get("parts")]
+    # Keep a result when it has kept parts OR unmapped parts — the latter carry
+    # the model's out-of-catalog / out-of-scope observations, which downstream
+    # diagnostics (and the facing consensus) must not silently lose.
+    view_results = [
+        r for r in view_results if r.get("parts") or r.get("unmapped_parts")
+    ]
+
+    # 4b. (face path only) Cross-photo facing consensus.  A low-confidence
+    # facing may simply be wrong (a front-windshield close-up misread as
+    # rear).  When high-confidence photos establish a dominant facing/side,
+    # low-confidence photos defer to it: we re-interpret the suspect photo
+    # under the consensus frame and keep only the damage observations whose
+    # location is self-consistent with the consensus damaged region.
+    if use_face_path and face_priors:
+        _apply_facing_consensus(face_priors, view_results)
+
+    # Persist each exterior photo's resolved primary view into the plan so the
+    # per-photo camera_position is auditable downstream (screen/vehicle-side
+    # mismatches are a known error source; without this the only record is the
+    # view log).  ``plan["photo_views"]`` maps photo_id -> primary_view.  On the
+    # face path the primary view comes from the deterministic facing (already
+    # flip-free), so this record is also the cross-photo camera_side consensus
+    # input.
+    plan["photo_views"] = [
+        {"photo_id": r.get("photo_id"), "view_id": r.get("primary_view")}
+        for r in view_results
+        if r.get("photo_id")
+    ]
+    if use_face_path:
+        plan["photo_faces"] = [
+            {
+                "photo_id": pid,
+                "facing": fp.get("facing"),
+                "camera_side": fp.get("camera_side"),
+                "assignable_faces": fp.get("assignable_faces"),
+            }
+            for pid, fp in face_priors.items()
+        ]
+
+    # Persist the per-photo unmapped parts so out-of-catalog / out-of-scope
+    # observations are auditable downstream instead of vanishing at the
+    # normalization boundary.
+    unmapped = [
+        {"photo_id": r.get("photo_id"), "unmapped_parts": r.get("unmapped_parts")}
+        for r in view_results
+        if r.get("unmapped_parts")
+    ]
+    if unmapped:
+        plan["unmapped_parts"] = unmapped
 
     # 5. Aggregate into PartEvidence, run side-consistency check, then
     # build region_results.  The side check downgrades mismatched
@@ -259,6 +339,21 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             # Primary view says damaged — accept unless contradicted by
             # strong-primary intact (handled above).
             entry["aggregated_status"] = "damaged"
+        elif (
+            damaged_votes >= 1
+            and primary_strong_intact_votes < 2
+            and any(
+                o["status"] == "damaged" and o.get("view_id") in primary_views
+                for o in entry["observations"]
+            )
+        ):
+            # A primary-view (priority <= 1, not necessarily strong) damaged
+            # observation convicts the part unless at least two strong-primary
+            # intact observations disagree.  A single strong-primary intact is
+            # not a consensus (§3.1), so it cannot alone override a primary
+            # damaged signal.  This is the conflict case the aggregator must
+            # still surface as damaged (with ``conflicting`` set below).
+            entry["aggregated_status"] = "damaged"
         elif damaged_votes >= 2 and primary_intact_votes == 0 and primary_observations == 0:
             # No primary observations but ≥2 damaged from secondary views —
             # trust the consensus when primary view didn't reach the part.
@@ -289,6 +384,90 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             entry["conflicting"] = True
 
     return evidence
+
+
+def _part_side(part_id: str) -> str:
+    """Return the vehicle side a part belongs to: left / right / center."""
+    if part_id.endswith("_left"):
+        return "left"
+    if part_id.endswith("_right"):
+        return "right"
+    return "center"
+
+
+def _apply_facing_consensus(
+    face_priors: Dict[str, Dict[str, Any]],
+    view_results: List[Dict[str, Any]],
+) -> None:
+    """Cross-photo facing consensus via damage-location self-consistency.
+
+    A low-confidence facing may simply be *wrong* — e.g. a front-windshield
+    close-up misread as ``rear`` because shattered glass looks the same front
+    and back.  The vehicle is a rigid body, so one batch of photos should
+    agree on which side/region is damaged.  This routine:
+
+    1. Lets high-confidence photos vote the consensus damaged side(s) from
+       where THEIR damage actually landed (not from the facing label — the
+       label can be wrong, the damaged parts are the ground signal).
+    2. For each low-confidence (or unusable) photo, checks whether its OWN
+       damaged observations are self-consistent with that consensus: does the
+       side its damaged parts fall on match a consensus damaged side?
+    3. Keeps consistent observations; soft-downgrades (confidence=low) the
+       ones that contradict the consensus — those are the likely mis-faced
+       false positives.  A photo whose damage IS consistent keeps full weight,
+       which "rescues" a mis-faced photo's real damage instead of dropping it.
+
+    This never touches high-confidence photos and never rewrites a part id —
+    it only downgrades confidence on contradictory observations, so the
+    downstream consensus rules (which already require high confidence or
+    corroboration) stop a mis-faced close-up from convicting a part alone.
+    """
+    damaged_by_photo: Dict[str, List[Dict[str, Any]]] = {}
+    for r in view_results:
+        pid = r.get("photo_id")
+        if not pid:
+            continue
+        damaged_by_photo[pid] = [
+            p for p in r.get("parts", []) if p.get("status") in ("damaged", "missing")
+        ]
+
+    # 1. Consensus damaged sides, voted by USABLE (high/medium-confidence,
+    #    clearly-faced) photos from the sides their damage actually fell on.
+    side_votes: Dict[str, int] = {}
+    for pid, fp in face_priors.items():
+        if not fp.get("usable"):
+            continue
+        for obs in damaged_by_photo.get(pid, []):
+            side = _part_side(obs.get("part_id", ""))
+            if side in ("left", "right"):
+                side_votes[side] = side_votes.get(side, 0) + 1
+    if not side_votes:
+        return  # no reliable damaged-side signal; nothing to check against
+    consensus_sides = {s for s, n in side_votes.items() if n == max(side_votes.values())}
+
+    # 2+3. For low-confidence / unusable photos, downgrade damage that
+    #      contradicts the consensus damaged side.
+    downgraded = 0
+    for pid, fp in face_priors.items():
+        if fp.get("usable"):
+            continue  # trusted photo — leave its observations alone
+        for obs in damaged_by_photo.get(pid, []):
+            side = _part_side(obs.get("part_id", ""))
+            if side == "center":
+                continue  # center parts (hood/roof/windshield) carry no side signal
+            if side not in consensus_sides:
+                obs["confidence"] = "low"
+                obs["model_confidence_score"] = min(
+                    float(obs.get("model_confidence_score", 0.5)), 0.4
+                )
+                obs["_consensus_downgraded"] = True
+                downgraded += 1
+    if downgraded:
+        logger.info(
+            "[master] facing consensus sides=%s downgraded %d contradictory "
+            "low-confidence observation(s)",
+            sorted(consensus_sides), downgraded,
+        )
 
 
 def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:

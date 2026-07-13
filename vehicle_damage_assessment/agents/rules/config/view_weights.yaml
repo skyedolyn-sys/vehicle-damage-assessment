@@ -90,6 +90,48 @@ default:
       front: 0
       front_right: 0
       right: 0
+    hood:
+      front: 0
+      front_left: 1
+      front_right: 1
+    bumper_front:
+      front: 0
+      front_left: 1
+      front_right: 1
+    grille_front:
+      front: 0
+      front_left: 1
+      front_right: 1
+    fender_front_left:
+      front: 0
+      front_left: 0
+      left: 0
+    trunk_lid:
+      rear: 0
+      rear_left: 1
+      rear_right: 1
+    tailgate:
+      rear: 0
+      rear_left: 1
+      rear_right: 1
+    bumper_rear:
+      rear: 0
+      rear_left: 1
+      rear_right: 1
+    fender_rear_left:
+      rear: 0
+      rear_left: 0
+      left: 0
+    fender_rear_right:
+      rear: 0
+      rear_right: 0
+      right: 0
+    roof_rack:
+      top: 0
+      left: 1
+      right: 1
+      front: 1
+      rear: 1
 
   primary_view:
     door_front_left:

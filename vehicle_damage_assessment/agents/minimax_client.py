@@ -37,67 +37,103 @@ async def call_minimax(
     model: str | None = None,
     response_format: Dict[str, Any] | None = None,
     reasoning_effort: str | None = None,
+    max_escalation_tokens: int | None = None,
 ) -> str:
-    """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）"""
+    """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）。
+
+    Truncation handling: MiniMax M3 sometimes spends the whole ``max_tokens``
+    budget inside a single ``<think>...</think>`` block and emits no JSON body
+    (``finish_reason == "length"``).  When that happens we do NOT silently
+    return the unparseable narrative — we escalate the token budget and retry
+    so the model has room for both reasoning and the JSON answer.
+    ``max_escalation_tokens`` caps that escalation (default: 2× ``max_tokens``).
+    """
     call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     request_model = model or MINIMAX_MODEL
+    if max_escalation_tokens is None:
+        max_escalation_tokens = max_tokens * 2
     logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s json_mode=%s reasoning=%s", call_id, request_model, temperature, max_tokens, bool(response_format), reasoning_effort)
 
     headers = {
         "Authorization": f"Bearer {MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
-    payload: Dict[str, Any] = {
-        "model": request_model,
-        "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-    }
-    if response_format:
-        payload["response_format"] = response_format
-    if reasoning_effort:
-        # MiniMax M3 supports reasoning_effort in {"low", "medium", "high"}.
-        # Default reasoning is unbounded and burns the full max_tokens
-        # budget on a single <think>...</think> block, leaving no room
-        # for the actual JSON answer.  Forcing "low" caps the thinking
-        # so the model has to commit to a structured output.
-        payload["reasoning_effort"] = reasoning_effort
+
+    def _build_payload(token_budget: int) -> Dict[str, Any]:
+        p: Dict[str, Any] = {
+            "model": request_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": token_budget,
+        }
+        if response_format:
+            p["response_format"] = response_format
+        if reasoning_effort:
+            # MiniMax M3 supports reasoning_effort in {"low", "medium", "high"}.
+            # Default reasoning is unbounded and burns the full max_tokens
+            # budget on a single <think>...</think> block, leaving no room
+            # for the actual JSON answer.  Forcing "low" caps the thinking
+            # so the model has to commit to a structured output.
+            p["reasoning_effort"] = reasoning_effort
+        return p
+
+    async def _single_request(token_budget: int) -> tuple[str, str]:
+        """One HTTP call. Returns (cleaned_content, finish_reason)."""
+        payload = _build_payload(token_budget)
+        connector = aiohttp.TCPConnector(limit=1, force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(
+                MINIMAX_BASE_URL,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_connect=30),
+                ssl=SSL_CONTEXT,
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
+                data = await resp.json()
+                choice = data["choices"][0]
+                content = choice["message"]["content"]
+                finish_reason = choice.get("finish_reason", "")
+                cleaned = clean_minimax_output(content)
+                return cleaned, finish_reason
+
+    def _has_usable_json(cleaned: str) -> bool:
+        return bool(cleaned) and extract_json(cleaned) is not None
 
     last_exception = None
+    token_budget = max_tokens
     for attempt in range(1, 4):
         start = time.perf_counter()
         try:
-            connector = aiohttp.TCPConnector(limit=1, force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                async with session.post(
-                    MINIMAX_BASE_URL,
-                    headers=headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_connect=30),
-                    ssl=SSL_CONTEXT,
-                ) as resp:
-                    elapsed = time.perf_counter() - start
-                    if resp.status != 200:
-                        text = await resp.text()
-                        logger.warning("[minimax:%s] attempt=%d status=%d elapsed=%.2fs text=%s", call_id, attempt, resp.status, elapsed, text[:500])
-                        raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
-                    data = await resp.json()
-                    content = data["choices"][0]["message"]["content"]
-                    cleaned = clean_minimax_output(content)
-                    logger.info("[minimax:%s] attempt=%d success elapsed=%.2fs raw_len=%d cleaned_len=%d", call_id, attempt, elapsed, len(content), len(cleaned))
-                    # Diagnostic: if cleaning stripped usable JSON, dump samples for inspection.
-                    if cleaned and not extract_json(cleaned):
-                        diagnostic_path = os.path.expanduser(f"~/minimax_diagnostic_{call_id}.txt")
-                        try:
-                            with open(diagnostic_path, "w", encoding="utf-8") as f:
-                                f.write("===== RAW =====\n")
-                                f.write(content)
-                                f.write("\n===== CLEANED =====\n")
-                                f.write(cleaned)
-                            logger.warning("[minimax:%s] cleaned content not parseable as JSON; diagnostic written to %s", call_id, diagnostic_path)
-                        except Exception as dump_exc:
-                            logger.warning("[minimax:%s] failed to write diagnostic: %s", call_id, dump_exc)
-                    return cleaned
+            cleaned, finish_reason = await _single_request(token_budget)
+            elapsed = time.perf_counter() - start
+            logger.info("[minimax:%s] attempt=%d success elapsed=%.2fs raw_budget=%d cleaned_len=%d finish=%s", call_id, attempt, elapsed, token_budget, len(cleaned), finish_reason)
+
+            # Truncation: finish_reason == "length" means the model ran out of
+            # token budget, so the JSON body is incomplete — even if a small
+            # fragment happens to parse.  Always escalate and retry rather than
+            # accept a truncated payload; only give up once the budget ceiling
+            # is reached.
+            if finish_reason == "length" and token_budget < max_escalation_tokens:
+                token_budget = min(token_budget * 2, max_escalation_tokens)
+                logger.warning("[minimax:%s] attempt=%d truncated (finish=length); escalating max_tokens→%d and retrying", call_id, attempt, token_budget)
+                continue
+
+            # Diagnostic: if cleaning stripped usable JSON, dump samples for inspection.
+            if cleaned and not extract_json(cleaned):
+                diagnostic_path = os.path.expanduser(f"~/minimax_diagnostic_{call_id}.txt")
+                try:
+                    with open(diagnostic_path, "w", encoding="utf-8") as f:
+                        f.write("===== FINISH_REASON =====\n")
+                        f.write(str(finish_reason))
+                        f.write("\n===== CLEANED =====\n")
+                        f.write(cleaned)
+                    logger.warning("[minimax:%s] cleaned content not parseable as JSON; diagnostic written to %s", call_id, diagnostic_path)
+                except Exception as dump_exc:
+                    logger.warning("[minimax:%s] failed to write diagnostic: %s", call_id, dump_exc)
+            return cleaned
         except (aiohttp.ClientConnectionError, asyncio.TimeoutError, RuntimeError) as e:
             elapsed = time.perf_counter() - start
             last_exception = e
