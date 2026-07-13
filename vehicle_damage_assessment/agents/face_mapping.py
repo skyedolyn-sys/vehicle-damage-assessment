@@ -72,28 +72,6 @@ def _higher_coverage(current: str, candidate: str) -> str:
 #: corroborated or upgraded when a real roof/top observation exists).
 _ROOF_OBLIQUE_FACES = ("front", "rear", "side", "left", "right")
 
-#: Front-side / rear-side structural pairs (A-pillar, C-pillar, side doors,
-#: side fender) are geometrically invisible from a side-unlocked front/rear
-#: head-on view — the camera only sees the front/rear face.  Earlier code
-#: admitted them at ``glimpse`` whenever the front/rear face was visible, which
-#: surfaced pillar_a_left / pillar_b_left / pillar_c_left / trunk_lid /
-#: windshield_rear / bumper_rear as candidates to the ViewAgent prompt and
-#: produced confident-but-false "damaged" verdicts (172852 geometry audit).
-#: Tier 1 fix: admit only when the camera side is locked, and only the
-#: matching side's pair.
-def _parts_by_side(sides: tuple[str, ...]) -> dict[str, set[str]]:
-    """Group PARTS_CATALOG part_ids whose ``side`` field is in ``sides``,
-    keyed by the trailing side token ("left"/"right")."""
-    out: dict[str, set[str]] = {"left": set(), "right": set()}
-    for p in PARTS_CATALOG:
-        if p["side"] in sides:
-            out[p["side"].rsplit("_", 1)[-1]].add(p["part_id"])
-    return out
-
-
-_FRONT_SIDE_PARTS_BY_SIDE = _parts_by_side(("front_left", "front_right"))
-_REAR_SIDE_PARTS_BY_SIDE = _parts_by_side(("rear_left", "rear_right"))
-
 
 def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
     """Map visible faces to the determinable parts and their coverage.
@@ -108,13 +86,15 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
     entirely at garage eye-level (no top-down photo) would never admit any roof
     part, and correctly-observed roof damage would be dropped as out-of-scope.
 
-    Front-side / rear-side structural pairs only admit at ``glimpse`` when
-    BOTH the front/rear face AND the corresponding side are visible (camera
-    side locked).  Without a locked side, the camera only sees a head-on
-    front/rear view and the side structural pairs are geometrically out of
-    view — admitting them produced confident-but-false "damaged" verdicts
-    for pillar_a_left / pillar_a_right / pillar_b_* / pillar_c_* /
-    trunk_lid / windshield_rear / bumper_rear in the 172852 audit.
+    Front-side / rear-side structural pairs (A-pillar, C-pillar, side doors,
+    side fender) are geometrically invisible from a side-unlocked front/rear
+    head-on view — the camera only sees the front/rear face.  Earlier code
+    admitted them at ``glimpse`` whenever the front/rear face was visible,
+    which surfaced pillar_a_left / pillar_b_left / pillar_c_left / trunk_lid /
+    windshield_rear / bumper_rear as ViewAgent candidates and produced
+    confident-but-false "damaged" verdicts (172852 geometry audit).  Tier 1
+    fix: a side-unlocked head-on view admits only the front/rear face parts
+    (plus the roof oblique fallback); the side pairs stay out of candidates.
     """
     face_coverage = {
         f.get("face"): f.get("coverage")
@@ -122,23 +102,14 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
         if f.get("face") and f.get("coverage")
     }
     roof_obliquely_visible = any(f in face_coverage for f in _ROOF_OBLIQUE_FACES)
-    locked_side: Optional[str] = "left" if "left" in face_coverage else (
-        "right" if "right" in face_coverage else None
+    locked_side: Optional[str] = next(
+        (s for s in ("left", "right") if s in face_coverage), None
     )
     front_visible = "front" in face_coverage
     rear_visible = "rear" in face_coverage
-    # Admit structural pairs from the front/rear face only when the matching
-    # side is also visible; otherwise the camera only sees the head-on face.
-    front_side_cands = (
-        _FRONT_SIDE_PARTS_BY_SIDE.get(locked_side or "", set())
-        if front_visible and locked_side else set()
-    )
-    rear_side_cands = (
-        _REAR_SIDE_PARTS_BY_SIDE.get(locked_side or "", set())
-        if rear_visible and locked_side else set()
-    )
-    side_unlocked_front = front_visible and not locked_side
-    side_unlocked_rear = rear_visible and not locked_side
+    # Head-on front/rear view (no locked side): the camera cannot resolve which
+    # side it sees, so front/rear-side structural pairs stay out of candidates.
+    side_unlocked = (front_visible or rear_visible) and locked_side is None
 
     result: dict[str, str] = {}
     for part in PARTS_CATALOG:
@@ -147,13 +118,11 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
         if coverage is None:
             if part["part_category"] == "roof" and roof_obliquely_visible:
                 coverage = "glimpse"
-            elif side_unlocked_front or side_unlocked_rear:
+            elif side_unlocked:
                 continue  # head-on view: skip side structural pairs
-            elif part_id in front_side_cands or part_id in rear_side_cands:
-                coverage = "glimpse"
             else:
                 continue
-        result[part_id] = _higher_coverage(result[part_id], coverage) if part_id in result else coverage
+        result[part_id] = _higher_coverage(result.get(part_id, coverage), coverage)
     return result
 
 
@@ -196,7 +165,7 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
             # the model's side-agnostic marker for "a side panel is visible".
             if camera_side is None:
                 continue  # no locked side -> drop the ambiguous side face
-            if COVERAGE_RANK.get(coverage, -1) > COVERAGE_RANK.get(side_coverage or "", -1):
+            if COVERAGE_RANK.get(coverage, -1) > COVERAGE_RANK.get(side_coverage, -1):
                 side_coverage = coverage
             continue
         normalized_faces.append({"face": face, "coverage": coverage})
