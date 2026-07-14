@@ -20,7 +20,7 @@ import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from agents.minimax_client import build_image_content
-from agents.face_mapping import build_face_prior
+from agents.face_mapping import align_profile_ids, build_face_prior
 from agents.face_profiler import face_profiler_agent
 from agents.planner_agent import planner_agent
 from agents.reviewer_subagent import reviewer_subagent
@@ -108,8 +108,12 @@ async def master_assessment_agent(
     face_priors: Dict[str, Dict[str, Any]] = {}
     if use_face_path and exterior_photos:
         profiles = await face_profiler_agent(exterior_photos, vehicle_prior)
-        for prof in profiles:
-            pid = prof.get("photo_id")
+        # Pair each profile with its authoritative input photo id.  The model
+        # sometimes echoes the id back without the extension (172852-07.png →
+        # 172852-07); keying face_priors on that mangled id makes the later
+        # ``face_priors.get(photo["id"])`` miss, silently dropping the photo to
+        # the unconstrained legacy path (172852 pillar_a_left FP).
+        for pid, prof in align_profile_ids(profiles, exterior_photos):
             if pid:
                 face_priors[pid] = build_face_prior(pid, prof)
         logger.info(

@@ -21,12 +21,57 @@ and front/back is mutually exclusive with left/right within one photo:
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from config import PARTS_CATALOG
 
 #: Coverage ranking — higher value wins when merging duplicate parts.
 COVERAGE_RANK = {"glimpse": 0, "partial": 1, "dominant": 2}
+
+
+def align_profile_ids(
+    profiles: List[dict], photos: List[dict]
+) -> List[tuple[str, dict]]:
+    """Pair each face profile with its authoritative input photo id.
+
+    The vision model occasionally echoes a photo id back in a mangled form —
+    most commonly dropping the file extension (``172852-07.png`` →
+    ``172852-07``).  Master then does ``face_priors.get(photo["id"])`` with the
+    *authoritative* id, misses, and the photo silently falls back to the
+    unconstrained legacy view_agent path — where the model self-guesses a
+    left/right-bearing view and mis-attributes damage (172852: a side-unlocked
+    A-pillar close-up convicted ``pillar_a_left``).
+
+    ``face_profiler._realign_to_input`` already guarantees ``profiles`` is in
+    the same order as ``photos``, so the authoritative pairing is positional.
+    We prefer an exact id match when the model echoed it correctly, then an
+    extension-tolerant match, and finally fall back to positional order.
+
+    Returns a list of ``(authoritative_photo_id, profile)`` tuples, one per
+    input photo, in input order.
+    """
+    by_exact = {p.get("photo_id"): p for p in profiles if p.get("photo_id")}
+
+    def _strip_ext(pid: str) -> str:
+        return pid.rsplit(".", 1)[0] if "." in pid else pid
+
+    by_stem: dict[str, dict] = {}
+    for p in profiles:
+        pid = p.get("photo_id")
+        if pid:
+            by_stem.setdefault(_strip_ext(pid), p)
+
+    aligned: List[tuple[str, dict]] = []
+    for index, photo in enumerate(photos):
+        pid = photo.get("id", "")
+        prof = by_exact.get(pid)
+        if prof is None:
+            prof = by_stem.get(_strip_ext(pid))
+        if prof is None and index < len(profiles):
+            prof = profiles[index]
+        aligned.append((pid, prof if prof is not None else {}))
+    return aligned
+
 
 #: Coverages that qualify a face for standalone damage assignment.
 ASSIGNABLE_COVERAGES = ("dominant", "partial")

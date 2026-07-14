@@ -13,12 +13,58 @@ except Exception:
 import pytest
 
 from agents.face_mapping import (
+    align_profile_ids,
     assignable_faces,
     build_face_prior,
     derive_camera_side,
     parts_for_faces,
 )
 from config import PARTS_BY_ID, PARTS_CATALOG
+
+
+# ---------------------------------------------------------------------------
+# align_profile_ids — authoritative photo-id pairing (172852 pillar_a_left FP)
+# ---------------------------------------------------------------------------
+
+def _photo(pid):
+    return {"id": pid, "path": f"/tmp/{pid}"}
+
+
+def test_align_exact_id_match():
+    photos = [_photo("172852-07.png"), _photo("172852-01.png")]
+    profiles = [{"photo_id": "172852-07.png", "facing": "unclear"},
+                {"photo_id": "172852-01.png", "facing": "front"}]
+    aligned = align_profile_ids(profiles, photos)
+    assert [pid for pid, _ in aligned] == ["172852-07.png", "172852-01.png"]
+    assert aligned[0][1]["facing"] == "unclear"
+    assert aligned[1][1]["facing"] == "front"
+
+
+def test_align_extension_dropped_by_model():
+    """Model echoes '172852-07' (no .png) — must still pair with 172852-07.png."""
+    photos = [_photo("172852-07.png")]
+    profiles = [{"photo_id": "172852-07", "facing": "unclear"}]
+    aligned = align_profile_ids(profiles, photos)
+    assert aligned[0][0] == "172852-07.png"  # authoritative id wins
+    assert aligned[0][1]["facing"] == "unclear"
+
+
+def test_align_positional_fallback_when_id_unrecognizable():
+    photos = [_photo("a.png"), _photo("b.png")]
+    profiles = [{"photo_id": "GARBAGE", "facing": "front"},
+                {"photo_id": "ALSO_GARBAGE", "facing": "rear"}]
+    aligned = align_profile_ids(profiles, photos)
+    assert [pid for pid, _ in aligned] == ["a.png", "b.png"]
+    assert aligned[0][1]["facing"] == "front"
+    assert aligned[1][1]["facing"] == "rear"
+
+
+def test_align_missing_profile_yields_empty_dict():
+    photos = [_photo("a.png"), _photo("b.png")]
+    profiles = [{"photo_id": "a.png", "facing": "front"}]
+    aligned = align_profile_ids(profiles, photos)
+    assert aligned[0][1]["facing"] == "front"
+    assert aligned[1][1] == {}  # no profile → empty, not a KeyError
 
 
 # ---------------------------------------------------------------------------
