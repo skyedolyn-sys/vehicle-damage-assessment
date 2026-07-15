@@ -89,6 +89,7 @@ def _build_system_prompt(vehicle_prior: Dict[str, Any]) -> str:
 - front: 必须能指出**明确车头特征**(车标/进气格栅/前大灯组/引擎盖前沿)才允许判 front。
 - rear: 必须能指出**明确车尾特征**(尾灯组/牌照框/后备箱盖或尾门/后保险杠)才允许判 rear。
 - **碎玻璃/钣金特写警告**: 前挡风玻璃和后挡风玻璃碎裂后外观几乎一样,单看碎玻璃**无法**区分 front 和 rear。若画面只有碎玻璃、A柱、车顶、钣金而**看不到上述明确车头/车尾特征**,**严禁**猜 front 或 rear,必须给 facing=unclear 且 confidence=low。
+- **纯玻璃/塌顶特写 → 必判 unclear（重要）**: 当一张俯拍/特写只能看到**碎玻璃 + 塌陷车顶 + 柱/翼子板**,**看不到车身侧面、也看不到完整可辨的车头（格栅/车标/大灯组轮廓）或车尾（尾灯组/牌照框/尾门）结构**时,front/rear 与 left/right **全都不可判**。此时必须 facing=unclear、side_panel_pos=none、confidence=low,**绝不**据"这片玻璃像前挡/后挡"去猜朝向——猜错会把损伤挂到完全相反的一侧。
 - side: 车身侧面占满,看不到明确车头或车尾特征(不要猜左右,一律 side)。
 - top: 俯视,车顶/天窗/车顶钣金占主体。
 - unclear: 内饰/证件/局部特写/纯碎玻璃,无法可靠判大方向。
@@ -107,6 +108,12 @@ def _build_system_prompt(vehicle_prior: Dict[str, Any]) -> str:
 - facing=top 或 unclear 时：给 none。
 - 例:车头朝画面右、车身向画面左延伸(侧面在车头左边) → side_panel_pos=left。
 - 只报相对位置,**不要**自己做左右翻转,翻转由下游确定性代码完成。
+- **对称/居中视角不得锁侧（重要）**：当车头(或车尾)在画面中**基本居中**、能同时看到
+  左右两侧（如正面俯拍同时看到前挡风+车顶+两根A柱、正中正面、正中正后）时,
+  `side_panel_pos` **必须**给 `center`（侧面占满给 `fills_frame`），**严禁**据"损伤
+  看着偏哪边"去猜 left/right。**损伤位置不能用来推侧**——画面中央一团碎玻璃/塌顶
+  不代表某一侧；只有**车身侧面本身明显偏向画面某一侧**时才允许给 left/right。
+  拿不准就给 `center`。
 
 【visible_faces 规则】
 - 最多 3 面，按占比降序排列。face 只能取自 front/rear/roof/left/right。
