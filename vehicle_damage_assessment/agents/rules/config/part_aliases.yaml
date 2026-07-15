@@ -146,6 +146,11 @@ aliases:
       - middle_roof
       - roof_center
       - centre_roof
+      # 整体 "roof" / "车顶" 在细分体系里非法，但模型仍会用——天窗/车顶中段是
+      # 塌顶主体最常落点（也是 sunroof_glass 所在段），兜底映射到 roof_middle。
+      # 真正发生在前/后段的塌陷，prompt 已要求模型细分报 roof_front/roof_rear。
+      - roof
+      - 车顶
   roof_rear:
     synonyms:
       - rear_roof

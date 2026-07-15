@@ -327,10 +327,9 @@ def test_build_face_prior_front_right_orientation():
 
 
 def test_build_face_prior_centered_rear_no_side():
-    # 正中 rear 特写（side_panel_pos=center，只有 rear 面，无真实侧面锚点）按 BUG2c
-    # 是纯玻璃/车尾特写：front/rear 不可判，facing 降 unclear、unusable。
-    # 候选集不剥（view=None 已排除聚合）；rear 面保留在 normalized_faces，
-    # assignable 含 rear，但该照片 view=None → 被 _build_region_results 整体跳过。
+    # 正中 rear 特写（side_panel_pos=center，visible_faces 有 rear 但无真实侧面锚点）
+    # 按 BUG2c 新规则：只降 camera_side 不降 facing——模型既然识别出了 rear 的
+    # 结构特征（尾灯/牌照框/尾门），facing 是可靠的；只是不能把损伤挂到 left/right。
     profile = {
         "facing": "rear",
         "side_panel_pos": "center",
@@ -339,11 +338,13 @@ def test_build_face_prior_centered_rear_no_side():
         "confidence": 0.9,
     }
     prior = build_face_prior("photo_002", profile)
-    assert prior["camera_side"] is None
-    assert prior["facing"] == "unclear", (
-        "a centered rear close-up with no side body panel cannot resolve front/rear"
+    assert prior["camera_side"] is None, (
+        "a centered rear with no side body panel must drop camera_side"
     )
-    assert prior["usable"] is False
+    assert prior["facing"] == "rear", (
+        "visible rear structural features (tailgate/tail lights) make facing reliable"
+    )
+    assert prior["usable"] is True
 
 
 def test_build_face_prior_side_naming_overridden_by_camera_side():
@@ -398,6 +399,9 @@ def test_symmetric_front_no_side_face_drops_camera_side():
 
     172852 run5: photo 20 对称俯拍被误判 front+left → camera_side=left →
     view=front_left → pillar_a_left（MUST_REMAIN_INTACT）被中央碎玻璃/塌顶误挂。
+
+    但 facing 保留为 front——模型确实识别出了车头特征（visible_faces 里有 front），
+    该照片仍能用来定罪 roof/sunroof/windshield 等 center 部件。
     """
     profile = {
         "facing": "front",
@@ -413,19 +417,17 @@ def test_symmetric_front_no_side_face_drops_camera_side():
     assert prior["camera_side"] is None, (
         "symmetric front view with no side face must drop camera_side"
     )
-    # BUG2c: a pure front+roof close-up has no side body panel to anchor the
-    # facing, so front/rear is also unresolvable → facing downgraded to unclear
-    # and unusable.  Candidates are NOT stripped (view=None excludes the photo
-    # from aggregation); assert the facing/usable downgrade instead.
-    assert prior["facing"] == "unclear"
-    assert prior["usable"] is False
+    # 新规则：visible_faces 有 front（车头结构特征可见），facing 保留
+    assert prior["facing"] == "front", (
+        "visible front structural features (hood/windshield frame) make facing reliable"
+    )
+    assert prior["usable"] is True
 
 
 def test_symmetric_rear_no_side_face_drops_camera_side():
     """Mirror case: rear symmetric view with no real side anchor → camera_side
-    None and (BUG2c) facing downgraded to unclear / unusable.  Candidates are
-    NOT stripped (view=None already excludes the photo from aggregation), so we
-    assert the facing/usable downgrade, not candidate removal."""
+    None.  But facing stays rear because visible_faces has rear (structural
+    features like tailgate/tail lights are visible)."""
     profile = {
         "facing": "rear",
         "side_panel_pos": "right",
@@ -435,8 +437,8 @@ def test_symmetric_rear_no_side_face_drops_camera_side():
     }
     prior = build_face_prior("photo_x", profile)
     assert prior["camera_side"] is None
-    assert prior["facing"] == "unclear"
-    assert prior["usable"] is False
+    assert prior["facing"] == "rear"
+    assert prior["usable"] is True
 
 
 def test_side_face_present_keeps_camera_side():
@@ -481,15 +483,12 @@ def test_non_front_rear_facing_not_affected_by_gate():
 # 纯玻璃/塌顶特写降朝向（BUG2c, 172852 photo 24 前后翻转 FP）
 # ---------------------------------------------------------------------------
 
-def test_pure_glass_closeup_downgrades_facing_to_unclear():
-    """纯碎玻璃+塌顶特写（visible_faces 只有 front/rear 面 + roof，无真实侧面锚点）
-    必须把 facing 从 front/rear 降为 unclear 且 usable=False——前/后不可判，
-    模型高置信乱猜会把碎前挡风当成碎后挡风挂到 rear/left 全家。
+def test_pure_glass_closeup_keeps_facing_when_rear_visible():
+    """纯碎玻璃+塌顶特写，但 visible_faces 里有 rear（模型识别出了后挡风/尾灯等
+    车尾结构特征）——按新规则 facing 保留 rear，只降 camera_side。
 
-    172852 photo 24: 跨 run 随机报 windshield_rear+pillar_c_left 或
-    windshield_front+pillar_a_right（primary=None 仍被错的 face_prior 锁向）。
-
-    候选集不剥（view=None 已把照片排除出聚合），所以这里断言朝向/usable 降级。
+    172852 photo 24 round1: 模型报 rear+roof，确实看到了后挡风破碎和车尾结构——
+    facing 是对的，只是不能把损伤挂到 left/right。
     """
     profile = {
         "facing": "rear",               # model guessed rear
@@ -497,26 +496,27 @@ def test_pure_glass_closeup_downgrades_facing_to_unclear():
         "visible_faces": [
             {"face": "rear", "coverage": "dominant"},
             {"face": "roof", "coverage": "partial"},
-        ],  # NO real side anchor → pure glass/roof close-up
+        ],  # NO real side anchor → 只降 camera_side
         "anchor": "碎裂的后挡风玻璃+塌陷车顶",
         "confidence": "high",
     }
     prior = build_face_prior("photo_24", profile)
-    assert prior["facing"] == "unclear", (
-        "pure glass/roof close-up must not keep a guessed front/rear facing"
+    assert prior["facing"] == "rear", (
+        "visible rear structural features make facing reliable"
     )
     assert prior["camera_side"] is None
-    assert prior["usable"] is False, (
-        "a guessed-facing glass close-up must not be usable for standalone verdicts"
-    )
+    assert prior["usable"] is True
 
 
 def test_glimpse_side_is_not_a_real_anchor():
     """A pure glass close-up that only leaks a *glimpse* of side body must still
-    be downgraded — a sliver of side is not a real front/rear anchor.
+    have camera_side dropped — a sliver of side is not a real anchor for left/right.
 
     172852 photo 24 round2: front/center with side=glimpse — must NOT be treated
-    as a real 3/4 view (which would keep front + convict right-side parts).
+    as a real 3/4 view (which would keep right-side conviction).
+
+    But facing stays front because visible_faces has front (hood/grille structural
+    features are visible).
     """
     profile = {
         "facing": "front",
@@ -530,14 +530,18 @@ def test_glimpse_side_is_not_a_real_anchor():
         "confidence": "medium",
     }
     prior = build_face_prior("photo_24", profile)
-    assert prior["facing"] == "unclear", (
-        "a glimpse of side body is not a real front/rear anchor"
+    assert prior["camera_side"] is None, (
+        "a glimpse of side body is not a real left/right anchor"
     )
-    assert prior["usable"] is False
+    assert prior["facing"] == "front", (
+        "visible front structural features make facing reliable"
+    )
+    assert prior["usable"] is True
 
 
-def test_front_pure_glass_closeup_also_downgrades():
-    """Mirror case: a front-facing pure glass close-up is equally unjudgeable."""
+def test_front_pure_glass_closeup_keeps_facing_when_front_visible():
+    """Mirror case: front-facing symmetric view keeps facing=front when visible_faces
+    has front (hood/grille structural features visible).  Only camera_side drops."""
     profile = {
         "facing": "front",
         "side_panel_pos": "right",
@@ -549,8 +553,9 @@ def test_front_pure_glass_closeup_also_downgrades():
         "confidence": "high",
     }
     prior = build_face_prior("p", profile)
-    assert prior["facing"] == "unclear"
-    assert prior["usable"] is False
+    assert prior["facing"] == "front"
+    assert prior["camera_side"] is None
+    assert prior["usable"] is True
 
 
 def test_real_three_quarter_view_keeps_facing_and_side():

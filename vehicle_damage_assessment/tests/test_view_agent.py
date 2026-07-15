@@ -256,13 +256,16 @@ async def test_view_agent_result_to_part_actual_states():
 
 @pytest.mark.asyncio
 async def test_symmetric_glass_closeup_yields_no_side_view():
-    """BUG2b+BUG2c: a symmetric glass/roof close-up (front+roof, no side body
-    panel) has no resolvable facing — build_face_prior downgrades it to
-    facing=unclear / camera_side=None, so view_agent gets primary_view == None
-    and NO front/rear/side-bearing part (esp. pillar_a_left) is a candidate.
+    """BUG2b+BUG2c 修订版：a symmetric glass/roof close-up that still shows the
+    vehicle's front structural features (visible_faces has front) keeps its
+    facing=front, but drops camera_side — so view_agent gets primary_view=front
+    and can convict roof/sunroof/windshield (center parts), but CANNOT convict
+    any left/right-suffixed part (pillar_a_left, mirror_right, etc).
 
-    172852 photo 20/24: pure shattered-glass + collapsed-roof shots that the
-    model randomly read as front+left or rear+left across runs.
+    172852 photo 20: symmetric front view with collapsed roof + sunroof shatter.
+    The car's hood/windshield frame is visible, so facing=front is reliable.
+    But it's NOT a 3/4 view, so we cannot tell left from right — central damage
+    must not be attributed to a specific side pillar.
     """
     from agents.face_mapping import build_face_prior
 
@@ -272,14 +275,34 @@ async def test_symmetric_glass_closeup_yields_no_side_view():
         "visible_faces": [
             {"face": "front", "coverage": "dominant"},
             {"face": "roof", "coverage": "partial"},
-        ],  # no side face → pure glass/roof close-up → facing+side dropped
+        ],  # no side face → only camera_side drops, facing stays front
         "anchor": "前挡风玻璃+车顶",
         "confidence": "high",
     }
     prior = build_face_prior("photo_20", profile)
-    assert prior["facing"] == "unclear"
+    assert prior["facing"] == "front", (
+        "visible front structural features (windshield frame, hood edge) make facing reliable"
+    )
     assert prior["camera_side"] is None
-    assert prior["usable"] is False
+    assert prior["usable"] is True
+    # 候选部件里不能有任何"车身侧面"的 left/right（door/mirror/pillar_*_left/right 等）
+    # ——camera_side=None 已剥离侧面归属
+    side_body_left_right = [
+        p for p in prior["candidate_parts"]
+        if (p.endswith("_left") or p.endswith("_right"))
+        and any(p.startswith(prefix) for prefix in
+                ("door_", "mirror_", "pillar_", "fender_rear_", "quarter_", "taillight_"))
+    ]
+    assert side_body_left_right == [], (
+        f"camera_side=None must strip side-body left/right candidates, got: {side_body_left_right}"
+    )
+    # 但仍能定罪 center 部件（roof/sunroof/windshield_front 等）
+    assert "roof_front" in prior["candidate_parts"]
+    assert "windshield_front" in prior["candidate_parts"]
+    assert "sunroof_glass" in prior["candidate_parts"]
+    # 前部的左右大灯/翼子板保留（它们是 front 视角的两个独立可见部件，不属于挂错侧问题）
+    assert "headlight_front_left" in prior["candidate_parts"]
+    assert "headlight_front_right" in prior["candidate_parts"]
 
     fake_json = {"parts": []}
     with patch("agents.view_agent.build_image_content", return_value={"type": "image_url"}):
@@ -291,16 +314,8 @@ async def test_symmetric_glass_closeup_yields_no_side_view():
                     face_prior=prior,
                 )
 
-    assert result["primary_view"] is None, (
-        "a pure glass/roof close-up has no resolvable view"
-    )
-    # The protection is primary_view=None: _build_region_results skips any
-    # result with no primary_view, so this photo never enters aggregation and
-    # cannot convict (or corroborate) any part — pillars included.  Candidates
-    # are backfilled into result["parts"] but are inert while view is None.
-    from agents.master_agent import _build_region_results
-    region_results = _build_region_results([result], {})
-    assert region_results == [], (
-        "a view=None photo must be dropped from region_results / aggregation"
+    # primary_view 应该是 front（不是 None）——该照片仍能贡献中心部件观察
+    assert result["primary_view"] == "front", (
+        "a symmetric front view with visible front features must keep primary_view=front"
     )
 

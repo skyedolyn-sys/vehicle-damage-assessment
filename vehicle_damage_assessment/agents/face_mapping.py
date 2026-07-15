@@ -200,25 +200,31 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
 
     raw_faces = list(profile.get("visible_faces") or [])
 
-    # 对称视角降侧 + 纯玻璃特写降朝向（确定性，零方差兜底）。
+    # 对称视角降侧（确定性，零方差兜底）。
     #
     # 几何事实：正中前/后拍（能同时看到左右两侧，如正面俯拍看到前挡风+车顶+两根
-    # A柱）无法把画面中央的损伤侧化到某一侧立柱；而"纯碎玻璃+塌顶"特写（前/后挡风
-    # 碎裂后外观几乎一样、看不到任何车头/车尾结构锚点）连 front/rear 都不可判。
+    # A柱）无法把画面中央的损伤侧化到某一侧立柱。
     #
-    # 判定锚点：front/rear 的朝向只有在画面里有**真实可辨的车身侧面**时才可锚定。
-    # "真实侧面" = visible_faces 里有 dominant/partial 的 left/right/side——一条
-    # glimpse 的侧面边缘（如纯玻璃俯拍偶尔漏出的一丝车身）**不足以**锚定前后。
+    # 判定锚点：front/rear 的朝向只有在画面里有**真实可辨的车身侧面**时才可锚定
+    # 左右。"真实侧面" = visible_faces 里有 dominant/partial 的 left/right/side——
+    # 一条 glimpse 的侧面边缘（如纯玻璃俯拍偶尔漏出的一丝车身）**不足以**锚定
+    # 左右。
+    #
+    # 对称降侧的边界：当模型**确实看到了车头或车尾的结构特征**（visible_faces 里
+    # 包含 front 或 rear，说明模型识别出了格栅/车标/引擎盖/尾灯/牌照框等），
+    # facing 本身是可靠的，**只降 camera_side 不降 facing**。这样正中正面照
+    # （172852-20：能看到车头+塌陷车顶+天窗）仍能贡献 roof/sunroof/windshield 的
+    # 损伤观察，不会被误降为 unclear 整张照片作废。
+    #
     # 诊断实证（172852 face_profiler 3 轮）：
-    #   - 24 纯玻璃俯拍：round1 给 unclear/low（安全），round2 抖成 front/center 且只
-    #     漏出 side=glimpse → 无真实侧面锚点，front 是猜的，必须降 unclear。
+    #   - 24 纯玻璃俯拍：visible_faces 里**没有** front/rear（只有 roof + 边缘
+    #     glimpse），facing 是模型猜的——这种已经被 face_profiler prompt 约束
+    #     必须给 unclear，不需要 face_mapping 再兜底降朝向。
     #   - 02/03/21 真实右前 3/4：稳定给 side=partial/dominant → 有真实侧面锚点，
-    #     保留 front+side，右前损伤正常定罪，detect 不回退。
-    #
-    # 降朝向的后果：facing → unclear → usable=False，且 _facing_to_view_id 给出
-    # view=None，该照片被 _build_region_results 整体跳过、不进聚合——它既不能定罪
-    # 也不能作佐证。**不剥候选**：view=None 已足够排除，剥候选只会误伤真实 3/4 照
-    # 在模型偶发漏 side 时的佐证能力（172852 BUG2c run1 detect 5/12 的教训）。
+    #     保留 front+side，右前损伤正常定罪。
+    #   - 20 正中正面俯拍：visible_faces 有 front + roof，没有 side → 该降
+    #     camera_side（不能把天窗/A柱损伤挂到具体左右），但 facing=front 是
+    #     对的（模型确实看到了车头），不能降为 unclear。
     has_real_side_anchor = any(
         f.get("face") in ("left", "right", "side")
         and COVERAGE_RANK.get(f.get("coverage"), -1) >= COVERAGE_RANK["partial"]
@@ -226,13 +232,10 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
     )
     facing = profile.get("facing")
     if facing in ("front", "rear") and not has_real_side_anchor:
-        # 无真实侧面锚点：对称视角 / 纯玻璃特写。先降侧，再把猜的朝向降 unclear。
+        # 无真实侧面锚点：对称视角。只降侧——damage 不能挂到 left/right 后缀部件。
+        # facing 保留：模型既然能识别出 front/rear 的结构特征（visible_faces 里
+        # 有 front/rear），facing 本身是可靠的。
         camera_side = None
-        has_front_rear_face = any(
-            f.get("face") in ("front", "rear") for f in raw_faces
-        )
-        if has_front_rear_face:
-            facing = "unclear"
     normalized_faces: list[dict] = []
     side_coverage: Optional[str] = None
     for f in raw_faces:
