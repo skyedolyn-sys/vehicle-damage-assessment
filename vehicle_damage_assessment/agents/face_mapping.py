@@ -199,40 +199,6 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
     camera_side = derive_camera_side(facing, side_panel_pos)
 
     raw_faces = list(profile.get("visible_faces") or [])
-
-    # 对称视角降侧 + 纯玻璃特写降朝向（确定性，零方差兜底）。
-    #
-    # 几何事实：正中前/后拍（能同时看到左右两侧，如正面俯拍看到前挡风+车顶+两根
-    # A柱）无法把画面中央的损伤侧化到某一侧立柱；而"纯碎玻璃+塌顶"特写（前/后挡风
-    # 碎裂后外观几乎一样、看不到任何车头/车尾结构锚点）连 front/rear 都不可判。
-    #
-    # 判定锚点：front/rear 的朝向只有在画面里有**真实可辨的车身侧面**时才可锚定。
-    # "真实侧面" = visible_faces 里有 dominant/partial 的 left/right/side——一条
-    # glimpse 的侧面边缘（如纯玻璃俯拍偶尔漏出的一丝车身）**不足以**锚定前后。
-    # 诊断实证（172852 face_profiler 3 轮）：
-    #   - 24 纯玻璃俯拍：round1 给 unclear/low（安全），round2 抖成 front/center 且只
-    #     漏出 side=glimpse → 无真实侧面锚点，front 是猜的，必须降 unclear。
-    #   - 02/03/21 真实右前 3/4：稳定给 side=partial/dominant → 有真实侧面锚点，
-    #     保留 front+side，右前损伤正常定罪，detect 不回退。
-    #
-    # 降朝向的后果：facing → unclear → usable=False，且 _facing_to_view_id 给出
-    # view=None，该照片被 _build_region_results 整体跳过、不进聚合——它既不能定罪
-    # 也不能作佐证。**不剥候选**：view=None 已足够排除，剥候选只会误伤真实 3/4 照
-    # 在模型偶发漏 side 时的佐证能力（172852 BUG2c run1 detect 5/12 的教训）。
-    has_real_side_anchor = any(
-        f.get("face") in ("left", "right", "side")
-        and COVERAGE_RANK.get(f.get("coverage"), -1) >= COVERAGE_RANK["partial"]
-        for f in raw_faces
-    )
-    facing = profile.get("facing")
-    if facing in ("front", "rear") and not has_real_side_anchor:
-        # 无真实侧面锚点：对称视角 / 纯玻璃特写。先降侧，再把猜的朝向降 unclear。
-        camera_side = None
-        has_front_rear_face = any(
-            f.get("face") in ("front", "rear") for f in raw_faces
-        )
-        if has_front_rear_face:
-            facing = "unclear"
     normalized_faces: list[dict] = []
     side_coverage: Optional[str] = None
     for f in raw_faces:
@@ -255,10 +221,8 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
     # facing was judged with enough confidence and is not the catch-all
     # "unclear".  Low-confidence / unclear photos are soft-downgraded: their
     # damage observations are kept but flagged so they cannot alone convict a
-    # part in the final assessment (they may still corroborate).  ``facing`` is
-    # the (possibly downgraded) facing — a pure-glass close-up already forced to
-    # "unclear" above is therefore also unusable.
-    facing_val = facing
+    # part in the final assessment (they may still corroborate).
+    facing_val = profile.get("facing")
     confidence_val = profile.get("confidence")
     usable = facing_val not in (None, "unclear") and confidence_val != "low"
 
