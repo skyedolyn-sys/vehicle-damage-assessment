@@ -149,13 +149,8 @@ async def master_assessment_agent(
     # low-confidence photos defer to it: we re-interpret the suspect photo
     # under the consensus frame and keep only the damage observations whose
     # location is self-consistent with the consensus damaged region.
-    consensus_side: Optional[str] = None
     if use_face_path and face_priors:
         _apply_facing_consensus(face_priors, view_results)
-        consensus_side = _derive_camera_side_consensus(face_priors, view_results)
-        if consensus_side:
-            _apply_side_mutex(view_results, consensus_side)
-            _filter_unlocked_side_observations(view_results, face_priors)
 
     # Persist each exterior photo's resolved primary view into the plan so the
     # per-photo camera_position is auditable downstream (screen/vehicle-side
@@ -204,6 +199,24 @@ async def master_assessment_agent(
             "screen/vehicle-side mismatch",
             side_violations,
         )
+
+    # 5b. Resolve left/right conflicts using cross-photo consensus.
+    #
+    # Three-layer defense:
+    #   1. Bilateral damage detection: if ≥2 part pairs show damage on BOTH
+    #      sides (e.g. door_front_left + door_front_right both damaged), the
+    #      vehicle likely sustained bilateral impact — respect the raw
+    #      observations, skip mutual exclusion entirely.
+    #   2. Unilateral mutual exclusion: when only ONE side of a part pair is
+    #      damaged, keep the higher-confidence observation and downgrade the
+    #      other to uncertain (view_agent may hallucinate mirrored damage when
+    #      given dual-side candidates on a pure-side photo).
+    #   3. Camera-side consensus: photos whose locked camera_side contradicts
+    #      the majority consensus are penalized — only high-confidence
+    #      damage_level observations (severe/moderate) survive; light damage
+    #      is downgraded to uncertain.
+    _resolve_left_right_conflicts(part_evidence, face_priors)
+
     region_results = _build_region_results(view_results, part_evidence)
 
     # 6. Reviewer
@@ -479,137 +492,6 @@ def _apply_facing_consensus(
         )
 
 
-def _derive_camera_side_consensus(
-    face_priors: Dict[str, Dict[str, Any]],
-    view_results: List[Dict[str, Any]],
-) -> Optional[str]:
-    """Derive the vehicle's damaged side from cross-photo camera_side consensus.
-
-    统计所有 usable 且 camera_side 锁定的照片的侧向分布，多数侧作为"真侧"。
-    当左右票数接近（差<2）时返回 None——无法确定真侧，不启用左右互斥。
-
-    172852 案例：01/02/03 是 front_left/front_right/front_right，04 被判
-    rear_left（实际 rear_right），09/24/29 是 rear_left/rear_right/rear_right。
-    若按片数投票 left=3 right=4，right 微弱多数；若按"高置信度片"投票
-    （confidence=high），right 多数更明确。
-    """
-    side_votes: Dict[str, int] = {"left": 0, "right": 0}
-    for pid, fp in face_priors.items():
-        if not fp.get("usable"):
-            continue
-        side = fp.get("camera_side")
-        if side in ("left", "right"):
-            # 高置信度照片权重 2，中置信度权重 1
-            weight = 2 if fp.get("confidence") == "high" else 1
-            side_votes[side] += weight
-
-    left_votes = side_votes["left"]
-    right_votes = side_votes["right"]
-    if abs(left_votes - right_votes) < 2:
-        logger.info(
-            "[master] camera_side consensus: tied (L=%d R=%d), no mutex",
-            left_votes, right_votes,
-        )
-        return None
-    consensus = "left" if left_votes > right_votes else "right"
-    logger.info(
-        "[master] camera_side consensus: %s (L=%d R=%d)",
-        consensus, left_votes, right_votes,
-    )
-    return consensus
-
-
-def _apply_side_mutex(
-    view_results: List[Dict[str, Any]],
-    consensus_side: str,
-) -> None:
-    """同部件左右互斥：基于共识侧，对侧部件的 damaged 降级为 uncertain。
-
-    一辆车同一部件（door_front, mirror, pillar_a 等）通常只有一侧受损。
-    当跨照片共识确定真侧后，对侧部件的 damaged 观察视为 FP 并降级。
-
-    例外：如果某部件在 consensus_side 上没有任何 damaged 观察（即真侧无损），
-    则对侧 damaged 可能是真的（双侧碰撞），不降级。
-    """
-    # 按部件基名分组（door_front_left/door_front_right → door_front）
-    damaged_sides: Dict[str, set] = {}
-    for r in view_results:
-        for obs in r.get("parts", []):
-            if obs.get("status") not in ("damaged", "missing"):
-                continue
-            part_id = obs.get("part_id", "")
-            base, side = _split_part_side(part_id)
-            if side:
-                damaged_sides.setdefault(base, set()).add(side)
-
-    downgraded = 0
-    for r in view_results:
-        for obs in r.get("parts", []):
-            if obs.get("status") not in ("damaged", "missing"):
-                continue
-            part_id = obs.get("part_id", "")
-            base, side = _split_part_side(part_id)
-            if not side or side == consensus_side:
-                continue
-            # 对侧部件：如果真侧同部件也有 damaged，则对侧是 FP
-            if consensus_side in damaged_sides.get(base, set()):
-                obs["status"] = "uncertain"
-                obs["confidence"] = "low"
-                obs["_side_mutex_downgraded"] = True
-                downgraded += 1
-    if downgraded:
-        logger.info(
-            "[master] side mutex (%s): downgraded %d opposite-side observation(s)",
-            consensus_side, downgraded,
-        )
-
-
-def _filter_unlocked_side_observations(
-    view_results: List[Dict[str, Any]],
-    face_priors: Dict[str, Dict[str, Any]],
-) -> None:
-    """camera_side=None 照片：只采纳高置信度损伤，中低置信度 damaged 降级。
-
-    无法确定左右的照片（对称视角、双采样 facing 不一致），其损伤观察的
-    左右归属不可靠。只保留 confidence=high 的 damaged（强证据可直接定罪），
-    medium/low 的 damaged 降级为 uncertain（需其他照片佐证）。
-    """
-    downgraded = 0
-    for r in view_results:
-        pid = r.get("photo_id")
-        if not pid:
-            continue
-        fp = face_priors.get(pid)
-        if not fp or fp.get("camera_side") is not None:
-            continue  # 锁侧照片不受影响
-        for obs in r.get("parts", []):
-            if obs.get("status") not in ("damaged", "missing"):
-                continue
-            part_id = obs.get("part_id", "")
-            _, side = _split_part_side(part_id)
-            if not side:
-                continue  # center 部件（hood/roof/windshield）不受影响
-            if obs.get("confidence") != "high":
-                obs["status"] = "uncertain"
-                obs["_unlocked_side_downgraded"] = True
-                downgraded += 1
-    if downgraded:
-        logger.info(
-            "[master] unlocked-side filter: downgraded %d non-high-confidence "
-            "damaged observation(s) from camera_side=None photos",
-            downgraded,
-        )
-
-
-def _split_part_side(part_id: str) -> tuple[str, Optional[str]]:
-    """Split part_id into (base, side).  Returns (part_id, None) for center parts."""
-    if part_id.endswith("_left"):
-        return part_id[:-5], "left"
-    if part_id.endswith("_right"):
-        return part_id[:-6], "right"
-    return part_id, None
-
-
 def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
     """Downgrade confidence on damaged observations whose view is
     outside the part's primary view set.
@@ -691,6 +573,171 @@ def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
             )
 
     return violations
+
+
+def _resolve_left_right_conflicts(
+    part_evidence: Dict[str, Dict[str, Any]],
+    face_priors: Dict[str, Dict[str, Any]],
+) -> None:
+    """Resolve left/right damage conflicts using cross-photo consensus.
+
+    Mutates part_evidence in place.  See master_assessment_agent step 5b for
+    the three-layer defense design.
+    """
+    # ---- Layer 1: bilateral damage detection --------------------------------
+    # Count part pairs where BOTH sides have at least one damaged observation.
+    # A "part pair" is (X_left, X_right) for the same base part X.
+    bilateral_pairs = 0
+    pairs_seen: set[str] = set()
+    for part_id, entry in part_evidence.items():
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        base = part_id.rsplit("_", 1)[0]
+        if base in pairs_seen:
+            continue
+        left_id = f"{base}_left"
+        right_id = f"{base}_right"
+        left_entry = part_evidence.get(left_id)
+        right_entry = part_evidence.get(right_id)
+        if not left_entry or not right_entry:
+            continue
+        left_damaged = any(
+            o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+            for o in left_entry.get("observations", [])
+        )
+        right_damaged = any(
+            o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+            for o in right_entry.get("observations", [])
+        )
+        if left_damaged and right_damaged:
+            bilateral_pairs += 1
+            pairs_seen.add(base)
+
+    if bilateral_pairs >= 2:
+        logger.info(
+            "[master.lr] bilateral damage detected (%d pairs) — respecting raw "
+            "observations, skipping mutual exclusion",
+            bilateral_pairs,
+        )
+        return  # skip Layer 2 and 3
+
+    # ---- Layer 3 (compute first, needed for Layer 2 penalty) ----------------
+    # Cross-photo camera_side consensus: majority side among usable photos.
+    side_votes = {"left": 0, "right": 0}
+    for fp in face_priors.values():
+        if not fp.get("usable"):
+            continue
+        side = fp.get("camera_side")
+        if side in ("left", "right"):
+            side_votes[side] += 1
+    consensus_side: Optional[str] = None
+    if side_votes["left"] > side_votes["right"]:
+        consensus_side = "left"
+    elif side_votes["right"] > side_votes["left"]:
+        consensus_side = "right"
+
+    # Photos whose camera_side contradicts the consensus — their left/right
+    # observations are suspect (face_profiler may have flipped the side).
+    suspect_photos: set[str] = set()
+    if consensus_side:
+        for pid, fp in face_priors.items():
+            if not fp.get("usable"):
+                continue
+            side = fp.get("camera_side")
+            if side and side != consensus_side:
+                suspect_photos.add(pid)
+
+    # ---- Layer 2: unilateral mutual exclusion -------------------------------
+    # For each part pair where only ONE side is damaged, keep the higher-
+    # confidence observation and downgrade the other side's observations to
+    # uncertain.  Additionally, observations from suspect photos (Layer 3)
+    # only survive if they report severe/moderate damage — light damage from
+    # a side-flipped photo is almost certainly a hallucination.
+    pairs_processed: set[str] = set()
+    downgraded_count = 0
+    for part_id in list(part_evidence.keys()):
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        base = part_id.rsplit("_", 1)[0]
+        if base in pairs_processed:
+            continue
+        pairs_processed.add(base)
+
+        left_id = f"{base}_left"
+        right_id = f"{base}_right"
+        left_entry = part_evidence.get(left_id)
+        right_entry = part_evidence.get(right_id)
+        if not left_entry or not right_entry:
+            continue
+
+        left_damaged_obs = [
+            o for o in left_entry.get("observations", [])
+            if o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+        ]
+        right_damaged_obs = [
+            o for o in right_entry.get("observations", [])
+            if o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+        ]
+
+        # Only one side damaged (with confidence) → mutual exclusion.
+        # Low-confidence damaged observations are treated as noise — they may
+        # be view_agent hallucinations on dual-side candidates and do not
+        # block the exclusion of the opposite side.
+        if left_damaged_obs and not right_damaged_obs:
+            _downgrade_side_observations(
+                right_entry, suspect_photos, reason=f"{right_id} excluded (only {left_id} damaged)"
+            )
+            downgraded_count += len(right_entry.get("observations", []))
+        elif right_damaged_obs and not left_damaged_obs:
+            _downgrade_side_observations(
+                left_entry, suspect_photos, reason=f"{left_id} excluded (only {right_id} damaged)"
+            )
+            downgraded_count += len(left_entry.get("observations", []))
+        # Both sides damaged or neither → no mutual exclusion (handled by Layer 1)
+
+    # Layer 3 penalty (independent of Layer 2 pair check): suspect photos'
+    # light-damage observations → uncertain.  Applies to ALL left/right parts,
+    # not just paired ones — a suspect photo's light damage report is almost
+    # certainly a side-flip hallucination regardless of whether the opposite
+    # side exists in the evidence.
+    for part_id, entry in part_evidence.items():
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        for obs in entry.get("observations", []):
+            if obs.get("photo_id") not in suspect_photos:
+                continue
+            if obs.get("status") != "damaged":
+                continue
+            level = obs.get("damage_level", "unknown")
+            if level == "light":
+                obs["status"] = "uncertain"
+                obs["confidence"] = "low"
+                obs["_consensus_penalty"] = True
+                downgraded_count += 1
+
+    if downgraded_count:
+        logger.info(
+            "[master.lr] downgraded %d observation(s) via left/right conflict "
+            "resolution (consensus_side=%s, suspect_photos=%d)",
+            downgraded_count, consensus_side, len(suspect_photos),
+        )
+
+
+def _downgrade_side_observations(
+    entry: Dict[str, Any],
+    suspect_photos: set[str],
+    *,
+    reason: str,
+) -> None:
+    """Downgrade all observations in a part entry to uncertain/low."""
+    for obs in entry.get("observations", []):
+        if obs.get("status") == "damaged":
+            obs["status"] = "uncertain"
+            obs["confidence"] = "low"
+            obs["_lr_excluded"] = reason
+        # Also downgrade suspect-photo observations regardless of status
+        if obs.get("photo_id") in suspect_photos:
+            obs["confidence"] = "low"
 
 
 _PRIMARY_VIEW_CACHE: Dict[str, set] = {}
