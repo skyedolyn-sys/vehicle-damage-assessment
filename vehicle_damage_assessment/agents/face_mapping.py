@@ -158,7 +158,7 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
 
     # 纯侧面照（facing=side, 未锁定左右）的双侧候选容错。
     #
-    # 几何事实：一张纯侧面照**一定**看到车的某一侧——问题只是不知道是哪一侧。
+    # 几何事实：一张侧面照**一定**看到车的某一侧——问题只是不知道是哪一侧。
     # 让 candidate 为空等于让 view_agent 无法定罪任何门/镜/柱（172852-10/21
     # 纯右侧照就是这样丢掉 door_rear_right / mirror_right 的）。
     #
@@ -168,12 +168,12 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
     # 照片只需负责"看到什么报什么"。
     #
     # 触发条件：visible_faces 里有 side（模型报告了"看到侧面"）但没有锁定
-    # left/right——正是纯侧面照的特征。facing=front/rear 的对称视角（无侧面
-    # 锚点）不触发——那种照片看不到门/镜/柱，双侧候选会引入假阳性。
-    side_only_unlocked = (
-        "side" in face_coverage and locked_side is None
-        and not front_visible and not rear_visible
-    )
+    # left/right。**不限于纯侧面照**——3/4 视角（side + front 或 side + rear）
+    # 同样需要双侧候选，因为 facing=side 意味着侧面是主体，front/rear 只是
+    # 边缘可见。172852-21（side + front + roof）就是这种case：主体是右侧
+    # 面，但 candidate 只有 front 部件，导致 door_rear_right 被 out_of_candidate
+    # drop。
+    side_only_unlocked = "side" in face_coverage and locked_side is None
 
     result: dict[str, str] = {}
     for part in PARTS_CATALOG:
@@ -182,13 +182,18 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
         if coverage is None:
             if part["part_category"] == "roof" and roof_obliquely_visible:
                 coverage = "glimpse"
+            elif side_only_unlocked and part["part_category"] in ("left", "right"):
+                # 纯侧面照 / 侧面 3/4 视角：左右两套侧面部件都进候选，coverage
+                # 沿用模型给的 side 覆盖度（glimpse 降级为 corroborate-only，
+                # 防止单侧 glimpse 证据单独定罪）。
+                #
+                # 优先于 side_unlocked 检查：visible_faces 有 side + front 时
+                # side_unlocked 会把 left/right 部件 continue 掉，但 facing=side
+                # 意味着侧面是主体，侧面部件必须进 candidate（172852-21 的
+                # door_rear_right 就是这样被丢的）。
+                coverage = face_coverage["side"]
             elif side_unlocked:
                 continue  # head-on view: skip side structural pairs
-            elif side_only_unlocked and part["part_category"] in ("left", "right"):
-                # 纯侧面照：左右两套侧面部件都进候选，coverage 沿用模型给的
-                # side 覆盖度（glimpse 降级为 corroborate-only，防止单侧
-                # glimpse 证据单独定罪）。
-                coverage = face_coverage["side"]
             else:
                 continue
         result[part_id] = _higher_coverage(result.get(part_id, coverage), coverage)

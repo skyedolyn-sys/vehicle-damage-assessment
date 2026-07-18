@@ -629,8 +629,12 @@ def test_pure_side_view_unlocked_gives_both_left_right_candidates():
 
 
 def test_pure_side_with_front_visible_does_not_double_candidate():
-    """facing=side 但同时 visible_faces 里有 front（3/4 视角）→ 不触发双侧
-    候选（避免在 3/4 视角里引入反向部件的假阳性）。
+    """facing=side 且 visible_faces 里有 front（3/4 视角）→ 也触发双侧候选。
+
+    172852-21 是 side + front + roof 的 3/4 视角，主体是右侧面但 candidate
+    原本只有 front 部件，导致 door_rear_right 被 out_of_candidate drop。
+    修复后：facing=side + camera_side=None 就给双侧候选，不管是否有 front/rear
+    边缘可见。
     """
     profile = {
         "facing": "side",
@@ -644,15 +648,17 @@ def test_pure_side_with_front_visible_does_not_double_candidate():
     }
     prior = build_face_prior("photo_x", profile)
     assert prior["camera_side"] is None
-    # 不触发双侧候选：左右侧面部件都不应仅靠 side_only_unlocked 进入
-    # （但若 visible_faces 里有 left/right 显式锁侧则例外——本例没有）
-    side_only_parts = [
-        pid for pid in prior["candidate_parts"]
-        if pid.endswith("_left") or pid.endswith("_right")
-    ]
-    # 3/4 视角只应该看到 front 部件 + roof oblique + 少量 glimpse
-    # 不应该出现 mirror_left+right 这种双侧并列
-    has_mirror_both = "mirror_left" in side_only_parts and "mirror_right" in side_only_parts
-    assert not has_mirror_both, "3/4 view should not admit both mirror_left and mirror_right"
+    # 双侧候选触发：左右侧面部件都进 candidate
+    for pid in (
+        "door_front_left", "door_front_right",
+        "door_rear_left", "door_rear_right",
+        "mirror_left", "mirror_right",
+    ):
+        assert pid in prior["candidate_parts"], (
+            f"3/4 side view should admit {pid} as candidate"
+        )
+    # front 部件也保留（visible_faces 里有 front）
+    assert "hood" in prior["candidate_parts"]
+    assert "windshield_front" in prior["candidate_parts"]
 
 
