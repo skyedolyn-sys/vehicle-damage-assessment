@@ -149,8 +149,13 @@ async def master_assessment_agent(
     # low-confidence photos defer to it: we re-interpret the suspect photo
     # under the consensus frame and keep only the damage observations whose
     # location is self-consistent with the consensus damaged region.
+    consensus_side: Optional[str] = None
     if use_face_path and face_priors:
         _apply_facing_consensus(face_priors, view_results)
+        consensus_side = _derive_camera_side_consensus(face_priors, view_results)
+        if consensus_side:
+            _apply_side_mutex(view_results, consensus_side)
+            _filter_unlocked_side_observations(view_results, face_priors)
 
     # Persist each exterior photo's resolved primary view into the plan so the
     # per-photo camera_position is auditable downstream (screen/vehicle-side
@@ -472,6 +477,137 @@ def _apply_facing_consensus(
             "low-confidence observation(s)",
             sorted(consensus_sides), downgraded,
         )
+
+
+def _derive_camera_side_consensus(
+    face_priors: Dict[str, Dict[str, Any]],
+    view_results: List[Dict[str, Any]],
+) -> Optional[str]:
+    """Derive the vehicle's damaged side from cross-photo camera_side consensus.
+
+    统计所有 usable 且 camera_side 锁定的照片的侧向分布，多数侧作为"真侧"。
+    当左右票数接近（差<2）时返回 None——无法确定真侧，不启用左右互斥。
+
+    172852 案例：01/02/03 是 front_left/front_right/front_right，04 被判
+    rear_left（实际 rear_right），09/24/29 是 rear_left/rear_right/rear_right。
+    若按片数投票 left=3 right=4，right 微弱多数；若按"高置信度片"投票
+    （confidence=high），right 多数更明确。
+    """
+    side_votes: Dict[str, int] = {"left": 0, "right": 0}
+    for pid, fp in face_priors.items():
+        if not fp.get("usable"):
+            continue
+        side = fp.get("camera_side")
+        if side in ("left", "right"):
+            # 高置信度照片权重 2，中置信度权重 1
+            weight = 2 if fp.get("confidence") == "high" else 1
+            side_votes[side] += weight
+
+    left_votes = side_votes["left"]
+    right_votes = side_votes["right"]
+    if abs(left_votes - right_votes) < 2:
+        logger.info(
+            "[master] camera_side consensus: tied (L=%d R=%d), no mutex",
+            left_votes, right_votes,
+        )
+        return None
+    consensus = "left" if left_votes > right_votes else "right"
+    logger.info(
+        "[master] camera_side consensus: %s (L=%d R=%d)",
+        consensus, left_votes, right_votes,
+    )
+    return consensus
+
+
+def _apply_side_mutex(
+    view_results: List[Dict[str, Any]],
+    consensus_side: str,
+) -> None:
+    """同部件左右互斥：基于共识侧，对侧部件的 damaged 降级为 uncertain。
+
+    一辆车同一部件（door_front, mirror, pillar_a 等）通常只有一侧受损。
+    当跨照片共识确定真侧后，对侧部件的 damaged 观察视为 FP 并降级。
+
+    例外：如果某部件在 consensus_side 上没有任何 damaged 观察（即真侧无损），
+    则对侧 damaged 可能是真的（双侧碰撞），不降级。
+    """
+    # 按部件基名分组（door_front_left/door_front_right → door_front）
+    damaged_sides: Dict[str, set] = {}
+    for r in view_results:
+        for obs in r.get("parts", []):
+            if obs.get("status") not in ("damaged", "missing"):
+                continue
+            part_id = obs.get("part_id", "")
+            base, side = _split_part_side(part_id)
+            if side:
+                damaged_sides.setdefault(base, set()).add(side)
+
+    downgraded = 0
+    for r in view_results:
+        for obs in r.get("parts", []):
+            if obs.get("status") not in ("damaged", "missing"):
+                continue
+            part_id = obs.get("part_id", "")
+            base, side = _split_part_side(part_id)
+            if not side or side == consensus_side:
+                continue
+            # 对侧部件：如果真侧同部件也有 damaged，则对侧是 FP
+            if consensus_side in damaged_sides.get(base, set()):
+                obs["status"] = "uncertain"
+                obs["confidence"] = "low"
+                obs["_side_mutex_downgraded"] = True
+                downgraded += 1
+    if downgraded:
+        logger.info(
+            "[master] side mutex (%s): downgraded %d opposite-side observation(s)",
+            consensus_side, downgraded,
+        )
+
+
+def _filter_unlocked_side_observations(
+    view_results: List[Dict[str, Any]],
+    face_priors: Dict[str, Dict[str, Any]],
+) -> None:
+    """camera_side=None 照片：只采纳高置信度损伤，中低置信度 damaged 降级。
+
+    无法确定左右的照片（对称视角、双采样 facing 不一致），其损伤观察的
+    左右归属不可靠。只保留 confidence=high 的 damaged（强证据可直接定罪），
+    medium/low 的 damaged 降级为 uncertain（需其他照片佐证）。
+    """
+    downgraded = 0
+    for r in view_results:
+        pid = r.get("photo_id")
+        if not pid:
+            continue
+        fp = face_priors.get(pid)
+        if not fp or fp.get("camera_side") is not None:
+            continue  # 锁侧照片不受影响
+        for obs in r.get("parts", []):
+            if obs.get("status") not in ("damaged", "missing"):
+                continue
+            part_id = obs.get("part_id", "")
+            _, side = _split_part_side(part_id)
+            if not side:
+                continue  # center 部件（hood/roof/windshield）不受影响
+            if obs.get("confidence") != "high":
+                obs["status"] = "uncertain"
+                obs["_unlocked_side_downgraded"] = True
+                downgraded += 1
+    if downgraded:
+        logger.info(
+            "[master] unlocked-side filter: downgraded %d non-high-confidence "
+            "damaged observation(s) from camera_side=None photos",
+            downgraded,
+        )
+
+
+def _split_part_side(part_id: str) -> tuple[str, Optional[str]]:
+    """Split part_id into (base, side).  Returns (part_id, None) for center parts."""
+    if part_id.endswith("_left"):
+        return part_id[:-5], "left"
+    if part_id.endswith("_right"):
+        return part_id[:-6], "right"
+    return part_id, None
 
 
 def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
