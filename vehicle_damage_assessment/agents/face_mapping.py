@@ -156,6 +156,25 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
     # side it sees, so front/rear-side structural pairs stay out of candidates.
     side_unlocked = (front_visible or rear_visible) and locked_side is None
 
+    # 纯侧面照（facing=side, 未锁定左右）的双侧候选容错。
+    #
+    # 几何事实：一张纯侧面照**一定**看到车的某一侧——问题只是不知道是哪一侧。
+    # 让 candidate 为空等于让 view_agent 无法定罪任何门/镜/柱（172852-10/21
+    # 纯右侧照就是这样丢掉 door_rear_right / mirror_right 的）。
+    #
+    # 解决：给左右两套候选。view_agent 报哪侧就是哪侧——模型对"画面里这侧
+    # 有没有损伤"的判断是可靠的，**不可靠的只是把这侧叫 left 还是 right**。
+    # 归侧的最终决定交给 master_agent 的跨照片共识（少数服从多数），单张
+    # 照片只需负责"看到什么报什么"。
+    #
+    # 触发条件：visible_faces 里有 side（模型报告了"看到侧面"）但没有锁定
+    # left/right——正是纯侧面照的特征。facing=front/rear 的对称视角（无侧面
+    # 锚点）不触发——那种照片看不到门/镜/柱，双侧候选会引入假阳性。
+    side_only_unlocked = (
+        "side" in face_coverage and locked_side is None
+        and not front_visible and not rear_visible
+    )
+
     result: dict[str, str] = {}
     for part in PARTS_CATALOG:
         part_id = part["part_id"]
@@ -165,6 +184,11 @@ def parts_for_faces(visible_faces: list[dict]) -> dict[str, str]:
                 coverage = "glimpse"
             elif side_unlocked:
                 continue  # head-on view: skip side structural pairs
+            elif side_only_unlocked and part["part_category"] in ("left", "right"):
+                # 纯侧面照：左右两套侧面部件都进候选，coverage 沿用模型给的
+                # side 覆盖度（glimpse 降级为 corroborate-only，防止单侧
+                # glimpse 证据单独定罪）。
+                coverage = face_coverage["side"]
             else:
                 continue
         result[part_id] = _higher_coverage(result.get(part_id, coverage), coverage)
@@ -241,14 +265,29 @@ def build_face_prior(photo_id: str, profile: dict) -> dict:
     for f in raw_faces:
         face = f.get("face")
         coverage = f.get("coverage")
-        if face in ("left", "right", "side"):
+        if face in ("left", "right"):
             # Defer the side panel's left/right to camera_side; remember the
-            # strongest coverage the model gave the side panel.  ``side`` is
-            # the model's side-agnostic marker for "a side panel is visible".
+            # strongest coverage the model gave the side panel.
             if camera_side is None:
                 continue  # no locked side -> drop the ambiguous side face
             if COVERAGE_RANK.get(coverage, -1) > COVERAGE_RANK.get(side_coverage, -1):
                 side_coverage = coverage
+            continue
+        if face == "side":
+            # ``side`` is the model's side-agnostic marker for "a side panel is
+            # visible".  When camera_side is locked we still defer to it (the
+            # locked side wins); when camera_side is None the ``side`` face is
+            # the ONLY signal that a side body panel is visible — dropping it
+            # would leave pure-side photos with an empty candidate list
+            # (172852-10/21/28/31 lost door_rear_right / mirror_right this way).
+            # Keep it so parts_for_faces can fan out into both left and right
+            # candidates for pure-side shots; the final left/right attribution
+            # is deferred to master_agent's cross-photo consensus.
+            if camera_side is not None:
+                if COVERAGE_RANK.get(coverage, -1) > COVERAGE_RANK.get(side_coverage, -1):
+                    side_coverage = coverage
+                continue
+            normalized_faces.append({"face": face, "coverage": coverage})
             continue
         normalized_faces.append({"face": face, "coverage": coverage})
     if camera_side is not None and side_coverage is not None:

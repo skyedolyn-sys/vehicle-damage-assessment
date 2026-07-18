@@ -263,6 +263,112 @@ async def face_profiler_agent(
 async def _profile_batch(
     photos: List[Dict[str, Any]], vehicle_prior: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
+    """Profile one small batch of photos (single LLM call).
+
+    N=2 sampling for facing stability: the same batch is profiled twice with
+    different sampling temperatures.  When the two runs agree on a photo's
+    ``facing`` the verdict is trusted; when they disagree the photo is
+    soft-downgraded to ``unclear`` so it cannot alone convict a part (its
+    damage observations still corroborate).  This targets the run-to-run
+    facing flip that produced run3-style cascades in 172852 stability tests
+    (single-sampling face_profiler occasionally flipped front→rear on the
+    collapsed-roof shot, poisoning every downstream candidate).
+    """
+    first = await _profile_batch_once(
+        photos, vehicle_prior, temperature=0.1, reasoning_effort="low"
+    )
+    second = await _profile_batch_once(
+        photos, vehicle_prior, temperature=0.4, reasoning_effort="medium"
+    )
+    return _merge_double_sample(first, second)
+
+
+def _merge_double_sample(
+    first: List[Dict[str, Any]], second: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Merge two face_profiler passes over the same batch.
+
+    Per photo:
+    - ``facing`` agreement → keep the verdict; merge ``visible_faces`` (union,
+      higher coverage wins); ``side_panel_pos`` takes the first non-"none".
+    - ``facing`` disagreement → downgrade to ``unclear`` + ``confidence=low``
+      so the photo is soft-flagged as unusable; downstream it can corroborate
+      but cannot alone convict.  ``visible_faces`` still merged (the geometry
+      signal is real even when facing is unstable).
+    """
+    second_by_id = {p.get("photo_id"): p for p in second}
+    merged: List[Dict[str, Any]] = []
+    for a in first:
+        pid = a.get("photo_id")
+        b = second_by_id.get(pid)
+        if b is None:
+            merged.append(a)
+            continue
+        faces = _merge_visible_faces(
+            a.get("visible_faces") or [], b.get("visible_faces") or []
+        )
+        side_pos = a.get("side_panel_pos")
+        if side_pos in (None, "none"):
+            side_pos = b.get("side_panel_pos")
+        if a.get("facing") == b.get("facing"):
+            conf_a = a.get("confidence", "low")
+            conf_b = b.get("confidence", "low")
+            conf = "high" if "high" in (conf_a, conf_b) else (
+                "medium" if "medium" in (conf_a, conf_b) else "low"
+            )
+            merged.append({
+                "photo_id": pid,
+                "facing": a.get("facing"),
+                "side_panel_pos": side_pos,
+                "visible_faces": faces,
+                "anchor": a.get("anchor") or b.get("anchor") or "无",
+                "confidence": conf,
+                "reason": a.get("reason") or b.get("reason") or "",
+            })
+        else:
+            merged.append({
+                "photo_id": pid,
+                "facing": "unclear",
+                "side_panel_pos": "none",
+                "visible_faces": faces,
+                "anchor": a.get("anchor") or b.get("anchor") or "无",
+                "confidence": "low",
+                "reason": (
+                    f"double-sample facing disagreement: "
+                    f"{a.get('facing')} vs {b.get('facing')}"
+                ),
+            })
+    return merged
+
+
+def _merge_visible_faces(
+    a: List[Dict[str, str]], b: List[Dict[str, str]]
+) -> List[Dict[str, str]]:
+    """Union of visible_faces; higher coverage wins per face; cap at 3."""
+    rank = {"glimpse": 0, "partial": 1, "dominant": 2}
+    by_face: Dict[str, str] = {}
+    for entry in list(a) + list(b):
+        face = entry.get("face")
+        cov = entry.get("coverage")
+        if not face or not cov:
+            continue
+        existing = by_face.get(face)
+        if existing is None or rank.get(cov, -1) > rank.get(existing, -1):
+            by_face[face] = cov
+    # deterministic order: dominant first, then partial, then glimpse
+    ordered = sorted(
+        by_face.items(), key=lambda kv: -rank.get(kv[1], 0)
+    )[:3]
+    return [{"face": f, "coverage": c} for f, c in ordered]
+
+
+async def _profile_batch_once(
+    photos: List[Dict[str, Any]],
+    vehicle_prior: Dict[str, Any],
+    *,
+    temperature: float,
+    reasoning_effort: str,
+) -> List[Dict[str, Any]]:
     """Profile one small batch of photos (single LLM call)."""
     system_prompt = _build_system_prompt(vehicle_prior)
 
@@ -276,14 +382,17 @@ async def _profile_batch(
 
     messages = [{"role": "user", "content": content}]
 
-    logger.info("[faceprofiler] start batch_size=%d", len(photos))
+    logger.info(
+        "[faceprofiler] start batch_size=%d temperature=%.2f effort=%s",
+        len(photos), temperature, reasoning_effort,
+    )
     raw = await call_minimax(
         messages,
-        temperature=0.1,
+        temperature=temperature,
         # 每张照片输出 ~60 字；留足余量但不过度,避免诱导模型写长推理。
         max_tokens=2000 * len(photos),
         response_format={"type": "json_object"},
-        reasoning_effort="low",
+        reasoning_effort=reasoning_effort,
     )
 
     parsed = extract_json(raw)

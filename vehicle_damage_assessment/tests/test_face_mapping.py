@@ -583,3 +583,76 @@ def test_real_three_quarter_view_keeps_facing_and_side():
     assert "taillight_rear_right" in prior["candidate_parts"]
 
 
+def test_pure_side_view_unlocked_gives_both_left_right_candidates():
+    """facing=side + camera_side=None（纯侧面照，未锁定左右）→ 左右两套
+    侧面部件都进 candidate。
+
+    172852-10/21/28/31 是纯右侧照，face_profiler 稳定给 facing=side +
+    side_panel_pos=fills_frame → camera_side=None。原逻辑下 normalized_faces
+    只有 "side"（被 defer 到 camera_side 后丢弃），parts_for_faces 找不到
+    category=left/right 的部件 → candidate 空 → view_agent 无法定罪
+    door_rear_right / mirror_right 等纯侧面可见部件（核心漏报源）。
+
+    修复：纯侧面照（visible_faces 里有 side，无 front/rear，无锁侧）给
+    左右两套候选，归侧最终决定交给 master_agent 跨照片共识。
+    """
+    profile = {
+        "facing": "side",
+        "side_panel_pos": "fills_frame",
+        "visible_faces": [
+            {"face": "side", "coverage": "dominant"},
+        ],
+        "anchor": "车身侧面",
+        "confidence": "high",
+    }
+    prior = build_face_prior("photo_10", profile)
+    assert prior["camera_side"] is None
+    # 左右两套侧面部件都进 candidate
+    for pid in (
+        "door_front_left", "door_front_right",
+        "door_rear_left", "door_rear_right",
+        "mirror_left", "mirror_right",
+        "pillar_a_left", "pillar_a_right",
+        "pillar_b_left", "pillar_b_right",
+        "fender_rear_left", "fender_rear_right",
+    ):
+        assert pid in prior["candidate_parts"], (
+            f"pure-side photo should admit {pid} as candidate"
+        )
+    # front/rear/roof 部件不进（侧面照看不到）
+    assert "windshield_front" not in prior["candidate_parts"]
+    assert "windshield_rear" not in prior["candidate_parts"]
+    assert "trunk_lid" not in prior["candidate_parts"]
+    # roof 可以从侧面 glimpse 看到（oblique roof fallback 仍然有效）
+    assert "roof_front" in prior["candidate_parts"]
+    assert prior["candidate_parts"]["roof_front"] == "glimpse"
+
+
+def test_pure_side_with_front_visible_does_not_double_candidate():
+    """facing=side 但同时 visible_faces 里有 front（3/4 视角）→ 不触发双侧
+    候选（避免在 3/4 视角里引入反向部件的假阳性）。
+    """
+    profile = {
+        "facing": "side",
+        "side_panel_pos": "fills_frame",
+        "visible_faces": [
+            {"face": "side", "coverage": "dominant"},
+            {"face": "front", "coverage": "partial"},  # 3/4 视角
+        ],
+        "anchor": "车身侧面+车头一角",
+        "confidence": "high",
+    }
+    prior = build_face_prior("photo_x", profile)
+    assert prior["camera_side"] is None
+    # 不触发双侧候选：左右侧面部件都不应仅靠 side_only_unlocked 进入
+    # （但若 visible_faces 里有 left/right 显式锁侧则例外——本例没有）
+    side_only_parts = [
+        pid for pid in prior["candidate_parts"]
+        if pid.endswith("_left") or pid.endswith("_right")
+    ]
+    # 3/4 视角只应该看到 front 部件 + roof oblique + 少量 glimpse
+    # 不应该出现 mirror_left+right 这种双侧并列
+    has_mirror_both = "mirror_left" in side_only_parts and "mirror_right" in side_only_parts
+    assert not has_mirror_both, "3/4 view should not admit both mirror_left and mirror_right"
+
+
