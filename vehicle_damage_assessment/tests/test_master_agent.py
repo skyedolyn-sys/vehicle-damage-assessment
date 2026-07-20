@@ -229,6 +229,110 @@ def test_build_region_results_groups_by_primary_view():
     assert region_results[0]["parts"][0]["part_id"] == "hood"
 
 
+def test_aggregate_part_evidence_keeps_backfilled_absent_observations_in_evidence():
+    """Backfill ``absent`` observations are KEPT in aggregator evidence but
+    tagged with ``_backfill=True`` so the synthesizer / topology layer can
+    recognize them as "no information".
+
+    Why we don't drop them at the aggregator layer: the synth + topology
+    layers already have well-tested filters for backfilled rows
+    (observed=False on evidence_sources, ``_is_backfilled_uncertain`` on
+    candidates).  Dropping them here would let a single-source
+    high-confidence damaged observation on a candidate part convict
+    without any cross-photo counterweight, surfacing new FPs (172852 E2E:
+    damaged 11 → 16 after the drop).  The aggregator must keep the row
+    but the row carries the backfill marker.
+    """
+    view_results = [
+        {
+            "photo_id": "p1",
+            "primary_view": "front",
+            "parts": [
+                {
+                    "part_id": "roof_middle",
+                    "status": "damaged",
+                    "damage_level": "severe",
+                    "damage_types": ["deformation"],
+                    "confidence": "high",
+                    "description": "车顶中部塌陷",
+                },
+            ],
+        },
+        {
+            "photo_id": "p2",
+            "primary_view": "rear",
+            "parts": [
+                {
+                    "part_id": "roof_middle",
+                    "status": "absent",          # sentinel (was "uncertain")
+                    "damage_level": "unknown",
+                    "damage_types": ["none"],
+                    "model_confidence_score": 0.0,
+                    "confidence": "low",
+                    "_backfill": True,
+                    "description": "backfill placeholder",
+                },
+            ],
+        },
+    ]
+
+    evidence = _aggregate_part_evidence(view_results)
+    assert "roof_middle" in evidence
+    entry = evidence["roof_middle"]
+    # Both observations present; backfill is kept but tagged.
+    assert len(entry["observations"]) == 2
+    backfill = next(o for o in entry["observations"] if o.get("_backfill"))
+    assert backfill["photo_id"] == "p2"
+    real = next(o for o in entry["observations"] if o.get("status") == "damaged")
+    assert real["photo_id"] == "p1"
+    # Real high-confidence damaged observation must drive aggregator verdict.
+    assert entry["aggregated_status"] == "damaged"
+
+
+def test_synthesizer_treats_absent_backfill_as_no_information():
+    """The synthesizer (``synthesizer._is_backfilled_uncertain``) must
+    recognise ``status="absent" + _backfill=True`` and exclude it from
+    consensus voting, just like the legacy ``status="uncertain" + score=0``
+    backfill it replaces.  This is the **only** layer that should actually
+    filter backfilled rows out of the verdict.
+    """
+    from agents.synthesizer import _is_backfilled_uncertain
+
+    # New sentinel — view_agent writes these.
+    new_backfill = {
+        "status": "absent",
+        "_backfill": True,
+        "model_confidence_score": 0.0,
+        "confidence": "low",
+    }
+    assert _is_backfilled_uncertain(new_backfill) is True
+
+    # Legacy backfill signature — still recognised for backward compat.
+    legacy_backfill = {
+        "status": "uncertain",
+        "model_confidence_score": 0.0,
+        "description": "该部件在照片中未被识别到，按视角清单补齐为uncertain",
+    }
+    assert _is_backfilled_uncertain(legacy_backfill) is True
+
+    # Real observations are NOT backfills.
+    real_damaged = {
+        "status": "damaged",
+        "damage_level": "severe",
+        "model_confidence_score": 0.85,
+        "confidence": "high",
+    }
+    assert _is_backfilled_uncertain(real_damaged) is False
+
+    real_uncertain = {
+        "status": "uncertain",
+        "damage_level": "unknown",
+        "model_confidence_score": 0.45,    # non-zero, real uncertain
+        "confidence": "low",
+    }
+    assert _is_backfilled_uncertain(real_uncertain) is False
+
+
 @pytest.mark.asyncio
 async def test_master_agent_dispatches_view_agent_per_exterior_photo():
     fake_prior = {

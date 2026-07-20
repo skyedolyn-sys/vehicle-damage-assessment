@@ -85,11 +85,18 @@ def _is_backfilled_uncertain(candidate: Dict[str, Any]) -> bool:
     """True when the candidate is a placeholder filled in by the view checklist
     (the model never actually observed the part), not a real uncertain verdict.
 
-    Backfilled rows carry ``model_confidence_score == 0.0`` and the fixed
-    "按视角清单补齐" description.  They must NOT count as evidence for or
-    against damage — they are simply "no information".
+    Backfilled rows either carry ``_backfill=True`` (the explicit skip tag
+    introduced when ``view_agent._backfill_from_candidates`` switched to
+    status ``absent``) **or** carry ``status=="uncertain"`` with a
+    ``model_confidence_score == 0.0`` and the fixed "按视角清单补齐" description
+    (the legacy view-checklist backfill).  Both kinds carry no information
+    and must NOT count as evidence for or against damage — they are simply
+    "no information".
     """
-    if candidate.get("status") != "uncertain":
+    # New sentinel: view_agent writes status="absent" with _backfill=True.
+    if candidate.get("_backfill"):
+        return True
+    if candidate.get("status") not in ("uncertain", "absent"):
         return False
     if float(candidate.get("model_confidence_score", 1.0)) == 0.0:
         return True

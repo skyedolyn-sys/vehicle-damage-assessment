@@ -528,8 +528,20 @@ def _backfill_from_candidates(
     Unlike ``_backfill_missing_parts`` (which uses the legacy per-view
     checklist), this only ever adds parts already in the deterministic
     candidate set — so backfill can never introduce a part from the wrong
-    side/face.  Backfilled parts are uncertain with score 0.0 (the same
-    backfill signature the downstream consensus logic already filters out).
+    side/face.
+
+    Status semantics:
+    - ``"absent"`` is a sentinel meaning "this part is in the camera's
+      candidate set but the LLM emitted no observation for it".  It carries
+      ``_backfill=True`` so downstream code (aggregator, synthesizer) can
+      recognize it and *exclude it from consensus voting*.  Without this,
+      a photo whose clear observation is "sunroof is crushed" would also
+      backfill ``fender_front_left``/``mirror_right``/``bumper_front`` and
+      every one of those parts would never reach consensus because the
+      backfilled uncertain observation cancels out the real damaged ones
+      from other photos.
+    - The legacy per-view ``_backfill_missing_parts`` uses the same
+      ``_backfill=True`` tag, so downstream code can treat both uniformly.
     """
     seen = {p["part_id"] for p in result.get("parts", [])}
     for part_id in candidate_parts:
@@ -541,12 +553,13 @@ def _backfill_from_candidates(
         result["parts"].append({
             "part_id": part_id,
             "part_name": part_info["part_name"],
-            "status": "uncertain",
+            "status": "absent",          # sentinel, NOT "uncertain"
             "damage_level": "unknown",
             "damage_types": ["none"],
             "model_confidence_score": 0.0,
             "confidence": "low",
-            "description": "该部件在照片中未被识别到，按面占比候选清单补齐为uncertain",
+            "_backfill": True,           # downstream skip tag
+            "description": "候选清单里的部件，LLM 未给出观察；标记为 absent（不参与投票）",
             "evidence_photo": result.get("photo_id"),
         })
     return result

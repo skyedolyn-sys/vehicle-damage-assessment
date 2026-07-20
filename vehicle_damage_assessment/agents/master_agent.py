@@ -315,6 +315,17 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
         photo_id = result.get("photo_id", "unknown")
         primary_view = result.get("primary_view")
         for obs in result.get("parts", []):
+            # NOTE: ``absent`` backfill observations (status="absent" + _backfill=True)
+            # are intentionally KEPT here in the aggregator.  The synthesizer
+            # already filters them out via _is_backfilled_uncertain, and the
+            # observed=False marker on evidence_sources keeps them out of the
+            # topology cascade rules.  Dropping them here looked tempting but
+            # breaks the safety net: a single-source high-confidence damaged
+            # observation on a candidate part (e.g. fender_front_left reported
+            # by a single front view) would otherwise convict the part without
+            # any cross-photo counterweight, surfacing new FPs (172852 E2E:
+            # damaged 11 → 16 after the skip).  Leave the filtering to
+            # synthesizer + topology, where it's already correct.
             part_id = obs["part_id"]
             entry = evidence.setdefault(part_id, {
                 "part_id": part_id,
