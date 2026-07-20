@@ -47,9 +47,16 @@ async def assessment_orchestrator(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
-    use_face_path: bool = False,
+    use_face_path: bool = True,
 ) -> Dict[str, Any]:
-    """Run the full assessment workflow and return the legacy result dict."""
+    """Run the full assessment workflow and return the legacy result dict.
+
+    Defaults to ``use_face_path=True`` because the face path (face_profiler +
+    deterministic camera_side + candidate-part filtering) is the production
+    pipeline verified on the 172852 sample (12 true-damaged, 0 false-positive
+    flips).  The legacy view path is kept for ablation and explicit
+    ``use_face_path=False`` overrides only.
+    """
     final_event = None
     async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan, use_face_path=use_face_path):
         if event.get("type") == "final":
@@ -63,7 +70,7 @@ async def assessment_orchestrator_stream(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
-    use_face_path: bool = False,
+    use_face_path: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream assessment workflow events.
 
@@ -78,7 +85,7 @@ async def _assessment_orchestrator_impl(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
-    use_face_path: bool = False,
+    use_face_path: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Delegate to MasterAgent and adapt its output to the legacy shape."""
     from agents.view_mapping import NON_EXTERIOR_VIEWS

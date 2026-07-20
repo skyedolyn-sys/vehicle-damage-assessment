@@ -245,9 +245,21 @@ def assess_stream(request, task_id: str):
 
     # Feature flag: use new orchestrator by default; allow fallback to legacy pipeline.
     use_orchestrator = request.GET.get("legacy", "").lower() not in ("true", "1", "yes")
+    # Feature flag: default the orchestrator onto the new face path (face_profiler
+    # + deterministic camera_side + candidate-part filtering).  Manual UI tests
+    # on 172852 showed the legacy view path produces 23 false-damaged parts vs
+    # the face path's 12 true-positives, because the legacy path triggers
+    # `_check_side_consistency` on pillar_a_right etc. whose observations come
+    # from views the part is not the "primary" view of, even when those
+    # observations are legitimate cross-view damage calls.  The face path
+    # bypasses that by feeding ViewAgent a locked candidate part set, so the
+    # model only emits damage for parts it should be able to assess.
+    use_face_path = request.GET.get("face_path", "true").lower() not in ("false", "0", "no")
     if use_orchestrator:
         return StreamingHttpResponse(
-            _orchestrator_workflow_sync(files, vehicle_info, plan=explicit_plan),
+            _orchestrator_workflow_sync(
+                files, vehicle_info, plan=explicit_plan, use_face_path=use_face_path
+            ),
             content_type="text/event-stream",
         )
     return StreamingHttpResponse(
@@ -294,6 +306,7 @@ def _orchestrator_workflow_sync(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = True,
 ) -> Generator[str, None, None]:
     """Synchronous wrapper around the new orchestrator async workflow.
 
@@ -315,7 +328,9 @@ def _orchestrator_workflow_sync(
 
     async def _bridge() -> None:
         try:
-            async for event in _run_orchestrator_workflow(files, vehicle_info, plan=plan):
+            async for event in _run_orchestrator_workflow(
+                files, vehicle_info, plan=plan, use_face_path=use_face_path
+            ):
                 q.put(event)
         except Exception as exc:  # propagate async errors as SSE error event
             q.put(_sse_event("error", {"message": str(exc)}))
@@ -358,6 +373,7 @@ async def _run_orchestrator_workflow(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = True,
 ) -> Generator[str, None, None]:
     """Async generator that yields SSE events from the orchestrator workflow."""
     from agents.output_validator import validate_and_enrich
@@ -424,7 +440,9 @@ async def _run_orchestrator_workflow(
         # reviewer 完成推 review_partial,最终 result 事件保持兼容。
         orchestrator_result = None
         review: Dict[str, Any] = {}
-        async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan):
+        async for event in assessment_orchestrator_stream(
+            files, vehicle_info, plan=plan, use_face_path=use_face_path
+        ):
             event_type = event.get("type")
             if event_type == "subagent_complete":
                 sub_result = event.get("serializable_result", {})
