@@ -48,6 +48,18 @@ _master_file_handler.setLevel(logging.INFO)
 logger.addHandler(_master_file_handler)
 logger.setLevel(logging.INFO)
 
+# C3/C4/D3 silent-node logging (commit d91cb3a).  These subagents emit
+# logger.info summaries from inside their own modules; without an explicit
+# FileHandler on their loggers, the messages propagate up but never reach
+# the disk because no root logger has a handler attached.  Attach the same
+# master file handler to each so audit lines land in the master log.
+for _silent_module in (
+    "agents.synthesizer",
+    "agents.topology_comparator",
+    "agents.reviewer_subagent",
+):
+    logging.getLogger(_silent_module).addHandler(_master_file_handler)
+
 
 async def master_assessment_agent(
     files: List[Dict[str, Any]],
