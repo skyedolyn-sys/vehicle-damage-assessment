@@ -113,6 +113,12 @@ async def reviewer_subagent(
            if low_conf_damaged else "")
     )
 
+    logger.info(
+        "[reviewer] %s | needs_rephotography=%d",
+        summary,
+        len(needs_rephotography),
+    )
+
     return {
         "reviewed_parts": reviewed_parts,
         "reviewed_part_actual_states": [

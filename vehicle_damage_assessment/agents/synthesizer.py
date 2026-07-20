@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import List, Dict, Any, Optional, Set
 from config import PARTS_CATALOG, PARTS_BY_ID, PARTS_TOPOLOGY
 from models.part_state import PartActualState
@@ -11,6 +12,8 @@ from agents.rules import (
 )
 from agents.view_mapping import canonicalize_view_id
 from agents._policy_logger import log_policy_conflict  # §4.3
+
+logger = logging.getLogger(__name__)
 
 
 _PRIORITIES = load_priority_map()
@@ -931,16 +934,58 @@ def synthesizer_agent(
     # (Rules 4-8) because they need evidence_source metadata.
 
     # Apply photo-gated adjacency consistency rules.
+    pre_adjacency_status = {p["part_id"]: p.get("status") for p in merged_parts}
     final_parts = _apply_adjacency_rules(merged_parts, topology)
+    adjacency_flips = [
+        (pid, pre_adjacency_status.get(pid), post.get("status"))
+        for pid, post in ((p["part_id"], p) for p in final_parts)
+        if pre_adjacency_status.get(pid) != post.get("status")
+    ]
 
     # Mirrors often appear at the edge of corner photos; if no view reports
     # damage and at least one view describes the visible shell as intact, fall
     # back to intact rather than leaving the mirror uncertain.
+    pre_mirror_status = {p["part_id"]: p.get("status") for p in final_parts}
     final_parts = _apply_mirror_fallback(final_parts, parts_by_id)
+    mirror_flips = [
+        (pid, pre_mirror_status.get(pid), p.get("status"))
+        for pid, p in ((p["part_id"], p) for p in final_parts)
+        if pre_mirror_status.get(pid) != p.get("status")
+    ]
 
     # Severe rear collisions may label crushed parts as "missing"; prefer
     # "damaged severe" when any source reports actual damage.
+    pre_rear_status = {p["part_id"]: p.get("status") for p in final_parts}
     final_parts = _apply_rear_missing_to_damaged_fallback(final_parts, parts_by_id)
+    rear_flips = [
+        (pid, pre_rear_status.get(pid), p.get("status"))
+        for pid, p in ((p["part_id"], p) for p in final_parts)
+        if pre_rear_status.get(pid) != p.get("status")
+    ]
+
+    # Final tally (so the silent synthesizer becomes auditable from master.log).
+    final_status_count: Dict[str, int] = {}
+    for p in final_parts:
+        s = p.get("status", "uncertain")
+        final_status_count[s] = final_status_count.get(s, 0) + 1
+    summary = (
+        f"synthesizer: {len(final_parts)} parts"
+        f" (damaged={final_status_count.get('damaged', 0)},"
+        f" intact={final_status_count.get('intact', 0)},"
+        f" uncertain={final_status_count.get('uncertain', 0)},"
+        f" missing={final_status_count.get('missing', 0)})"
+        f" | adjacency_flips={len(adjacency_flips)}"
+        f" mirror_flips={len(mirror_flips)}"
+        f" rear_flips={len(rear_flips)}"
+    )
+    logger.info("[synthesizer] %s", summary)
+    if adjacency_flips:
+        logger.info(
+            "[synthesizer] adjacency flips: %s",
+            ", ".join(f"{pid}:{pre}->{post}" for pid, pre, post in adjacency_flips[:5]),
+        )
+        if len(adjacency_flips) > 5:
+            logger.info("[synthesizer]   ... %d more", len(adjacency_flips) - 5)
 
     part_actual_states = [PartActualState.from_legacy_dict(p) for p in final_parts]
 
@@ -948,6 +993,10 @@ def synthesizer_agent(
         "parts": final_parts,
         "part_actual_states": part_actual_states,
         "uncertain_items": all_uncertain_items,
+        "summary": summary,
+        "adjacency_flips": adjacency_flips,
+        "mirror_flips": mirror_flips,
+        "rear_flips": rear_flips,
     }
 
 

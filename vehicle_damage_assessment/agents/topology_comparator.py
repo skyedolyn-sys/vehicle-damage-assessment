@@ -5,6 +5,7 @@ Produces a DamageAssessment with structural damage pattern detection.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import replace
 from typing import Any, Dict, List, Set
@@ -16,6 +17,8 @@ from config import PARTS_BY_ID
 from models.assessment import DamageAssessment, StructuralDamagePattern
 from models.part_state import DamageLevel, PartActualState, Status
 from models.topology import VehicleTopology
+
+logger = logging.getLogger(__name__)
 
 
 # Damage level weights for primary_damage_zone calculation.
@@ -609,6 +612,15 @@ class TopologyComparator:
 
         # 6. structural_damage_flag: True if any severe pattern exists.
         structural_flag = any(p.severity == "severe" for p in patterns)
+
+        logger.info(
+            "[topology] %d parts (damaged=%d intact=%d uncertain=%d missing=%d) "
+            "| patterns=%d %s | structural_flag=%s | primary_zone=%s",
+            len(parts), len(damaged_parts), len(intact_parts),
+            len(uncertain_parts), len(missing_parts),
+            len(patterns), [p.pattern_id for p in patterns],
+            structural_flag, primary_zone,
+        )
 
         return DamageAssessment(
             vehicle_info={
