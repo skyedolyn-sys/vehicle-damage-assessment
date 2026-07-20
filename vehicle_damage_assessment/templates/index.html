@@ -370,6 +370,165 @@
             margin: 24px 0 12px;
         }
 
+        /* ── 整体定损结论卡片 ───────────────────────────────────── */
+        .overall-finding {
+            margin-top: 18px;
+            border-radius: 12px;
+            padding: 18px 20px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--text-muted);
+        }
+        .overall-finding.severe {
+            background: linear-gradient(180deg, rgba(220, 38, 38, 0.04) 0%, var(--surface) 60%);
+            border-left-color: var(--danger);
+        }
+        .overall-finding.mild {
+            border-left-color: var(--success);
+        }
+
+        .finding-headline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+        .finding-icon { font-size: 20px; }
+        .overall-finding.severe .finding-icon { color: var(--danger); }
+        .overall-finding.mild  .finding-icon { color: var(--success); }
+
+        .finding-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: var(--bg);
+            color: var(--text-secondary);
+            font-size: 12px;
+            border: 1px solid var(--border);
+        }
+        .meta-pill b {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+        .meta-pill.zone b { color: var(--danger); }
+        .meta-pill.severity b { color: var(--warning); }
+        .meta-pill.count b { color: var(--text-primary); }
+
+        .insight-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 10px;
+        }
+        .insight-card {
+            border-radius: 10px;
+            padding: 12px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-left: 3px solid var(--text-muted);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .insight-card.red    { border-left-color: var(--danger); }
+        .insight-card.orange { border-left-color: var(--warning); }
+        .insight-card.blue   { border-left-color: var(--accent); }
+
+        .insight-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .insight-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--text-muted);
+        }
+        .insight-card.red    .insight-dot { background: var(--danger); }
+        .insight-card.orange .insight-dot { background: var(--warning); }
+        .insight-card.blue   .insight-dot { background: var(--accent); }
+        .insight-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            flex: 1;
+        }
+        .insight-count {
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: var(--surface);
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+        }
+        .insight-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            word-break: break-word;
+        }
+        .insight-advice {
+            font-size: 12px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 8px 10px;
+            background: var(--surface);
+            border-radius: 6px;
+            border: 1px dashed var(--border);
+        }
+
+        .insight-empty, .finding-empty {
+            font-size: 13px;
+            color: var(--text-secondary);
+            padding: 12px 0;
+        }
+
+        .top-damaged {
+            margin-top: 16px;
+            padding-top: 14px;
+            border-top: 1px dashed var(--border);
+        }
+        .top-damaged-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .top-damaged-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .top-part {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+        }
+        .top-part .tp-name { font-weight: 600; color: var(--text-primary); }
+        .top-part .tp-region { color: var(--text-secondary); }
+        .top-part .tp-level {
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+        .top-part.level-severe   { border-color: var(--danger); }
+        .top-part.level-severe   .tp-level { color: var(--danger); }
+        .top-part.level-moderate { border-color: var(--warning); }
+        .top-part.level-moderate .tp-level { color: var(--warning); }
+
         .hidden { display: none; }
 
         /* 移动端 ≤ 640px */
@@ -383,6 +542,9 @@
             .upload-icon { width: 40px; height: 40px; font-size: 20px; }
             .parts-table { font-size: 13px; }
             .parts-table th, .parts-table td { padding: 10px 8px; }
+            .insight-grid { grid-template-columns: 1fr; }
+            .overall-finding { padding: 14px 14px; }
+            .finding-headline { font-size: 14px; }
         }
     </style>
 </head>
@@ -569,6 +731,79 @@
             }[c]));
         }
 
+        // ── 整体结论卡片的两个 helper ────────────────────────────────────
+        // 把 structural_patterns 的 pattern_id 翻译成中文短句 + 视觉色级
+        // (red = 严重, orange = 警告, blue = 信息)。  翻 human-readable 文案
+        // 让前端不需要解析 "Region 'right' has 6 damaged/missing parts …" 这串
+        // 英文,而是直接展示"右侧 6 个部件大面积受损"。
+        const PATTERN_LABELS = {
+            regional_mass_damage:    { label: '区域大面积损伤',   severity: 'red'    },
+            cross_region_penetration: { label: '跨区域穿透损伤',   severity: 'red'    },
+            structural_component_damage: { label: '结构件受损',  severity: 'red'    },
+            symmetric_damage:        { label: '对称损伤',         severity: 'orange' },
+            safety_critical_missing: { label: '关键安全件缺失',    severity: 'red'    },
+        };
+        // pattern_id → 中文"建议一句话" (用于结论卡底部)
+        const PATTERN_ADVICE = {
+            regional_mass_damage:    '该区域多个部件同时损坏，维修时需按整体变形修复而非单件更换。',
+            cross_region_penetration: '损伤沿车身穿透相连，建议优先确认车架结构完整性。',
+            structural_component_damage: 'A/B/C 柱或车顶框架等承力部件损坏，建议整车定损。',
+            symmetric_damage: '左右对称损伤通常意味着翻滚或多次碰撞，需复核现场照片。',
+            safety_critical_missing: '关键安全件缺失，车辆不可继续行驶。',
+        };
+
+        function buildInsightCards(patterns) {
+            if (!patterns || !patterns.length) {
+                return '<div class="insight-empty">未发现结构化损伤模式</div>';
+            }
+            // 同 pattern_id 只展示一次 (取第一条)
+            const seen = new Set();
+            const cards = [];
+            for (const p of patterns) {
+                const meta = PATTERN_LABELS[p.pattern_id];
+                if (!meta || seen.has(p.pattern_id)) continue;
+                seen.add(p.pattern_id);
+                const advice = PATTERN_ADVICE[p.pattern_id] || '';
+                // 从 description 中提取"X 个部件"或"X regions"作为关键数字
+                const countMatch = p.description && p.description.match(/(\d+)/);
+                const countText = countMatch ? countMatch[1] : '';
+                const matched = (p.matched_nodes || []).length;
+                cards.push(`
+                    <div class="insight-card ${meta.severity}">
+                        <div class="insight-head">
+                            <span class="insight-dot"></span>
+                            <span class="insight-title">${escapeHtml(meta.label)}</span>
+                            ${matched
+                                ? `<span class="insight-count">${matched} 个部件</span>`
+                                : ''}
+                        </div>
+                        <div class="insight-detail">${escapeHtml(p.description || '')}</div>
+                        ${advice ? `<div class="insight-advice">${escapeHtml(advice)}</div>` : ''}
+                    </div>
+                `);
+            }
+            return cards.join('');
+        }
+
+        // 找出受损最严重的几个部件,按 damage_level 严重度排序
+        const DAMAGE_LEVEL_RANK = {
+            severe: 4, moderate: 3, light: 2, unknown: 1, none: 0,
+        };
+        function topDamagedParts(parts, n = 6) {
+            return (parts || [])
+                .filter(p => p.status === 'damaged')
+                .sort((a, b) =>
+                    (DAMAGE_LEVEL_RANK[b.damage_level] || 0)
+                    - (DAMAGE_LEVEL_RANK[a.damage_level] || 0)
+                )
+                .slice(0, n);
+        }
+
+        // 把英文 region 翻成中文
+        const REGION_CN = {
+            front: '车头', rear: '车尾', left: '车左', right: '车右', roof: '车顶',
+        };
+
         function setStep(stepIndex) {
             document.querySelectorAll('.progress-step').forEach(el => {
                 const s = parseInt(el.dataset.step);
@@ -645,11 +880,16 @@
             resultCard.classList.remove('hidden');
             const summary = data.assessment_summary || {};
             const isSevere = summary.structural_damage_flag;
+            const patterns = data.structural_patterns || [];
+            const damagedCount = summary.damaged_parts_count || 0;
+            const primaryZone = (summary.primary_damage_zone || '').toLowerCase();
+            const primaryZoneCn = REGION_CN[primaryZone] || primaryZone || '—';
+            const topParts = topDamagedParts(data.parts || [], 6);
 
             document.getElementById('resultSummary').innerHTML = `
                 <div class="summary-grid">
                     <div class="summary-card ${isSevere ? 'severe' : 'success'}">
-                        <div class="value">${summary.damaged_parts_count || 0}</div>
+                        <div class="value">${damagedCount}</div>
                         <div class="label">损坏部件</div>
                     </div>
                     <div class="summary-card">
@@ -673,17 +913,40 @@
                         <div class="label">结构性事故</div>
                     </div>
                 </div>
-                ${isSevere
-                    ? `<div class="uncertain-block">
-                        <h3>⚠️ 触发结构性事故</h3>
-                        <div>${escapeHtml(
-                            (data.structural_damage_reasoning || {}).description
-                            || data.structural_damage_reasoning
-                            || ''
-                        )}</div>
-                    </div>`
-                    : ''
-                }
+
+                <!-- 整体定损结论卡：把 structural_patterns 翻译成人话 -->
+                <div class="overall-finding ${isSevere ? 'severe' : 'mild'}">
+                    <div class="finding-headline">
+                        <span class="finding-icon">${isSevere ? '⚠️' : '✅'}</span>
+                        <span class="finding-title">${
+                            isSevere
+                            ? '判定为结构性事故'
+                            : (damagedCount > 0 ? '外观有局部损伤，未达结构性事故' : '未发现明显外观损伤')
+                        }</span>
+                    </div>
+                    <div class="finding-meta">
+                        <span class="meta-pill zone">主损伤区：<b>${escapeHtml(primaryZoneCn)}</b></span>
+                        <span class="meta-pill severity">整体严重等级：<b>${escapeHtml(summary.overall_severity || '-')}</b></span>
+                        <span class="meta-pill count">受损部件：<b>${damagedCount}</b> / ${(data.parts || []).length}</span>
+                    </div>
+                    ${patterns.length > 0
+                        ? `<div class="insight-grid">${buildInsightCards(patterns)}</div>`
+                        : '<div class="finding-empty">本次识别未触发任何结构化损伤模式。</div>'}
+                    ${topParts.length > 0
+                        ? `<div class="top-damaged">
+                            <div class="top-damaged-title">关键受损部件（按严重度排序）</div>
+                            <div class="top-damaged-grid">
+                                ${topParts.map(p => `
+                                    <div class="top-part level-${escapeHtml(p.damage_level)}">
+                                        <span class="tp-name">${escapeHtml(p.part_name || p.part_id)}</span>
+                                        <span class="tp-region">${escapeHtml(p.part_category || '')}</span>
+                                        <span class="tp-level">${escapeHtml(p.damage_level)}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>`
+                        : ''}
+                </div>
             `;
 
             const tbody = document.getElementById('partsTableBody');
