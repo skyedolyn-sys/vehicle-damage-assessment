@@ -53,12 +53,18 @@ logger.setLevel(logging.INFO)
 # FileHandler on their loggers, the messages propagate up but never reach
 # the disk because no root logger has a handler attached.  Attach the same
 # master file handler to each so audit lines land in the master log.
+#
+# The root logger is WARNING-level (Django default), which would suppress
+# INFO summaries even with a handler attached; explicitly set each
+# silent-module logger to INFO so the summaries are emitted.
 for _silent_module in (
     "agents.synthesizer",
     "agents.topology_comparator",
     "agents.reviewer_subagent",
 ):
-    logging.getLogger(_silent_module).addHandler(_master_file_handler)
+    sl = logging.getLogger(_silent_module)
+    sl.addHandler(_master_file_handler)
+    sl.setLevel(logging.INFO)
 
 
 async def master_assessment_agent(
