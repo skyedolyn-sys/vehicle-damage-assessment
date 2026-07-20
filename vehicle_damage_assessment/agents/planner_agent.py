@@ -286,3 +286,58 @@ async def planner_agent(
     )
 
     return {"photo_classifications": photo_classifications}
+
+
+def get_coverage_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize photo classification coverage for the SSE `locations` event.
+
+    Why this exists: the orchestrator SSE handler (``api/views.py``) sends a
+    ``locations`` event that the debug console renders before streaming
+    per-view subagent results.  The legacy planner emitted a
+    ``view_groups`` map keyed by ``STANDARD_VIEWS``; the new planner only
+    produces 4-class ``photo_classifications`` (exterior / interior /
+    document / other).  We synthesize a coverage summary from the new
+    classification output so the frontend keeps working.
+
+    Shape contract (consumed by ``api/views._run_orchestrator_workflow``):
+        ``covered_view_count``  : int, number of exterior photos classified
+        ``exterior_view_count`` : int, the standard exterior view count
+        ``photo_count``         : int, total photos in plan
+        ``categories``          : dict[str, int], count by category
+    """
+    classifications = plan.get("photo_classifications", []) or []
+    counts: Dict[str, int] = {}
+    for entry in classifications:
+        cat = entry.get("category", "unknown")
+        counts[cat] = counts.get(cat, 0) + 1
+
+    # Lazy import to avoid circular dependency on view_mapping.
+    from agents.view_mapping import EXTERIOR_VIEWS
+
+    return {
+        "covered_view_count": counts.get("exterior", 0),
+        "exterior_view_count": len(EXTERIOR_VIEWS),
+        "photo_count": len(classifications),
+        "categories": counts,
+    }
+
+
+def plan_to_location_map(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Project planner output into a ``photo_id → location`` map for SSE.
+
+    Each location dict carries the classification fields so the debug console
+    can render a per-photo row before subagent results arrive.
+    """
+    locations: Dict[str, Dict[str, Any]] = {}
+    for entry in plan.get("photo_classifications", []) or []:
+        photo_id = entry.get("photo_id", "")
+        if not photo_id:
+            continue
+        locations[photo_id] = {
+            "photo_id": photo_id,
+            "category": entry.get("category", "unknown"),
+            "confidence": entry.get("confidence", "low"),
+            "confidence_score": entry.get("confidence_score", 0.0),
+            "reason": entry.get("reason", ""),
+        }
+    return locations

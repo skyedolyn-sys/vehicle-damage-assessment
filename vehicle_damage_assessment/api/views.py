@@ -29,7 +29,6 @@ from agents import (
 from agents.view_mapping import (
     EXTERIOR_VIEWS,
     NON_EXTERIOR_VIEWS,
-    STANDARD_VIEWS,
     get_display_name,
     get_regions_for_view,
     is_exterior_view,
@@ -67,7 +66,7 @@ def _parse_view_override(raw: str) -> Dict[str, str]:
         photo_id, view_id = pair.split(":", 1)
         photo_id = photo_id.strip()
         view_id = view_id.strip().lower()
-        if photo_id and view_id in STANDARD_VIEWS:
+        if photo_id and view_id in EXTERIOR_VIEWS:
             mapping[photo_id] = view_id
     return mapping
 
@@ -98,7 +97,7 @@ def _build_plan_from_view_override(
         )
 
     # Build view_groups with exterior photos only.
-    groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in STANDARD_VIEWS}
+    groups: Dict[str, List[Dict[str, Any]]] = {view: [] for view in EXTERIOR_VIEWS}
     for entry in photo_views:
         view_id = entry["view_id"]
         photo_id = entry["photo_id"]
