@@ -35,12 +35,9 @@ from agents.view_mapping import PHOTO_TYPE_CATEGORIES
 from config import IMAGE_MAX_WIDTH
 
 logger = logging.getLogger(__name__)
-_planner_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_planner.log"), mode="a", encoding="utf-8"
-)
-_planner_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_planner_file_handler.setLevel(logging.INFO)
-logger.addHandler(_planner_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "planner.log")
 logger.setLevel(logging.INFO)
 
 

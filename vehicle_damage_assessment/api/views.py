@@ -10,7 +10,8 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, Dict, Generator, List
+from contextlib import contextmanager
+from typing import Any, Dict, Generator, List, Optional
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.conf import settings
@@ -49,6 +50,72 @@ def index(request):
     """Serve the built-in HTML debug console."""
     from django.shortcuts import render
     return render(request, "index.html")
+
+
+class _LLMOverride:
+    """Temporarily swap the LLM provider config for a single request.
+
+    Used by ``assess_stream`` when the UI forwards a developer-supplied
+    provider / api_key / base_url / model via ``?provider=...&api_key=...
+    &base_url=...&model=...``.  The swap is process-wide because
+    ``config.MINIMAX_*`` and ``os.environ["LLM_PROVIDER"]`` are read by
+    downstream modules at call time.  We guard the swap with a context
+    manager so values are restored on exception / response completion
+    regardless of how the SSE generator returns.
+
+    Not thread-safe across concurrent requests using different overrides
+    — acceptable here because Django's dev server is single-threaded.
+    """
+
+    def __init__(
+        self,
+        *,
+        provider: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+    ):
+        self._provider = provider.strip().lower() if provider else None
+        self._api_key = api_key.strip() if api_key else None
+        self._base_url = base_url.strip() if base_url else None
+        self._model = model.strip() if model else None
+        self._saved_provider = None
+        self._saved_api_key = None
+        self._saved_base_url = None
+        self._saved_model = None
+
+    def __enter__(self):
+        import config as _config
+        import os as _os
+        if self._provider is not None:
+            self._saved_provider = _os.environ.get("LLM_PROVIDER")
+            _os.environ["LLM_PROVIDER"] = self._provider
+        if self._api_key is not None:
+            self._saved_api_key = _config.MINIMAX_API_KEY
+            _config.MINIMAX_API_KEY = self._api_key
+        if self._base_url is not None:
+            self._saved_base_url = _config.MINIMAX_BASE_URL
+            _config.MINIMAX_BASE_URL = self._base_url
+        if self._model is not None:
+            self._saved_model = _config.MINIMAX_MODEL
+            _config.MINIMAX_MODEL = self._model
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        import config as _config
+        import os as _os
+        if self._saved_provider is not None or self._provider is not None:
+            if self._saved_provider is None:
+                _os.environ.pop("LLM_PROVIDER", None)
+            else:
+                _os.environ["LLM_PROVIDER"] = self._saved_provider
+        if self._saved_api_key is not None:
+            _config.MINIMAX_API_KEY = self._saved_api_key
+        if self._saved_base_url is not None:
+            _config.MINIMAX_BASE_URL = self._saved_base_url
+        if self._saved_model is not None:
+            _config.MINIMAX_MODEL = self._saved_model
+        return False
 
 
 def _parse_view_override(raw: str) -> Dict[str, str]:
@@ -186,86 +253,103 @@ def assess_stream(request, task_id: str):
     year = request.GET.get("year", "")
     vehicle_info = {"brand": brand, "model": model, "year": year}
 
-    try:
-        uuid.UUID(task_id)
-    except ValueError:
-        return StreamingHttpResponse(
-            _error_stream("任务ID格式无效"),
-            content_type="text/event-stream",
-        )
+    # Optional per-request LLM provider override.  The UI lets a developer
+    # paste a different provider / api_key / base_url / model in the top
+    # form and forward them here; this lets them A/B between MiniMax,
+    # OpenAI, and Anthropic without restarting the server.  Empty/missing
+    # for any field falls back to the env default.  We never log the
+    # api_key itself.
+    override = _LLMOverride(
+        provider=request.GET.get("provider"),
+        api_key=request.GET.get("api_key"),
+        base_url=request.GET.get("base_url"),
+        model=request.GET.get("model"),
+    )
+    override.__enter__()
 
-    task = None
     try:
-        task = UploadedTask.objects.get(task_id=task_id)
-    except UploadedTask.DoesNotExist:
-        pass
-
-    files = []
-    if task is not None:
-        for photo in task.photos.all():
-            files.append(
-                {
-                    "id": photo.photo_id,
-                    "path": photo.file_path,
-                    "name": photo.photo_id,
-                    "url": photo.file_url,
-                }
+        try:
+            uuid.UUID(task_id)
+        except ValueError:
+            return StreamingHttpResponse(
+                _error_stream("任务ID格式无效"),
+                content_type="text/event-stream",
             )
 
-    # Backward compatibility: fall back to the filesystem for tasks created
-    # by the previous FastAPI backend.
-    if not files:
-        task_dir = os.path.join(settings.MEDIA_ROOT, task_id)
-        if os.path.isdir(task_dir):
-            for filename in sorted(os.listdir(task_dir)):
-                if not filename.lower().endswith(IMAGE_EXTENSIONS):
-                    continue
-                file_path = os.path.join(task_dir, filename)
-                file_url = f"{settings.BASE_URL}{settings.MEDIA_URL}{task_id}/{filename}"
+        task = None
+        try:
+            task = UploadedTask.objects.get(task_id=task_id)
+        except UploadedTask.DoesNotExist:
+            pass
+
+        files = []
+        if task is not None:
+            for photo in task.photos.all():
                 files.append(
                     {
-                        "id": filename,
-                        "path": file_path,
-                        "name": filename,
-                        "url": file_url,
+                        "id": photo.photo_id,
+                        "path": photo.file_path,
+                        "name": photo.photo_id,
+                        "url": photo.file_url,
                     }
                 )
 
-    if not files:
+        # Backward compatibility: fall back to the filesystem for tasks created
+        # by the previous FastAPI backend.
+        if not files:
+            task_dir = os.path.join(settings.MEDIA_ROOT, task_id)
+            if os.path.isdir(task_dir):
+                for filename in sorted(os.listdir(task_dir)):
+                    if not filename.lower().endswith(IMAGE_EXTENSIONS):
+                        continue
+                    file_path = os.path.join(task_dir, filename)
+                    file_url = f"{settings.BASE_URL}{settings.MEDIA_URL}{task_id}/{filename}"
+                    files.append(
+                        {
+                            "id": filename,
+                            "path": file_path,
+                            "name": filename,
+                            "url": file_url,
+                        }
+                    )
+
+        if not files:
+            return StreamingHttpResponse(
+                _error_stream("任务不存在"),
+                content_type="text/event-stream",
+            )
+
+        # Optional manual view override: ?views=photo1:front_left,photo2:front_right
+        view_override = _parse_view_override(request.GET.get("views", ""))
+        explicit_plan = None
+        if view_override:
+            explicit_plan = _build_plan_from_view_override(files, view_override)
+
+        # Feature flag: use new orchestrator by default; allow fallback to legacy pipeline.
+        use_orchestrator = request.GET.get("legacy", "").lower() not in ("true", "1", "yes")
+        if use_orchestrator:
+            # Feature flag: default the orchestrator onto the new face path (face_profiler
+            # + deterministic camera_side + candidate-part filtering).  Manual UI tests
+            # on 172852 showed the legacy view path produces 23 false-damaged parts vs
+            # the face path's 12 true-positives, because the legacy path triggers
+            # `_check_side_consistency` on pillar_a_right etc. whose observations come
+            # from views the part is not the "primary" view of, even when those
+            # observations are legitimate cross-view damage calls.  The face path
+            # bypasses that by feeding ViewAgent a locked candidate part set, so the
+            # model only emits damage for parts it should be able to assess.
+            use_face_path = request.GET.get("face_path", "true").lower() not in ("false", "0", "no")
+            return StreamingHttpResponse(
+                _orchestrator_workflow_sync(
+                    files, vehicle_info, plan=explicit_plan, use_face_path=use_face_path
+                ),
+                content_type="text/event-stream",
+            )
         return StreamingHttpResponse(
-            _error_stream("任务不存在"),
+            _assess_workflow_sync(files, vehicle_info, plan=explicit_plan),
             content_type="text/event-stream",
         )
-
-    # Optional manual view override: ?views=photo1:front_left,photo2:front_right
-    view_override = _parse_view_override(request.GET.get("views", ""))
-    explicit_plan = None
-    if view_override:
-        explicit_plan = _build_plan_from_view_override(files, view_override)
-
-    # Feature flag: use new orchestrator by default; allow fallback to legacy pipeline.
-    use_orchestrator = request.GET.get("legacy", "").lower() not in ("true", "1", "yes")
-    # Feature flag: default the orchestrator onto the new face path (face_profiler
-    # + deterministic camera_side + candidate-part filtering).  Manual UI tests
-    # on 172852 showed the legacy view path produces 23 false-damaged parts vs
-    # the face path's 12 true-positives, because the legacy path triggers
-    # `_check_side_consistency` on pillar_a_right etc. whose observations come
-    # from views the part is not the "primary" view of, even when those
-    # observations are legitimate cross-view damage calls.  The face path
-    # bypasses that by feeding ViewAgent a locked candidate part set, so the
-    # model only emits damage for parts it should be able to assess.
-    use_face_path = request.GET.get("face_path", "true").lower() not in ("false", "0", "no")
-    if use_orchestrator:
-        return StreamingHttpResponse(
-            _orchestrator_workflow_sync(
-                files, vehicle_info, plan=explicit_plan, use_face_path=use_face_path
-            ),
-            content_type="text/event-stream",
-        )
-    return StreamingHttpResponse(
-        _assess_workflow_sync(files, vehicle_info),
-        content_type="text/event-stream",
-    )
+    finally:
+        override.__exit__(None, None, None)
 
 
 def _sse_event(event_type: str, data: Dict[str, Any]) -> str:
@@ -357,18 +441,6 @@ def _orchestrator_workflow_sync(
         yield item
 
 
-async def _collect_orchestrator_events(
-    files: List[Dict[str, Any]],
-    vehicle_info: Dict[str, str],
-    plan: Dict[str, Any] | None = None,
-) -> List[str]:
-    """Consume the async orchestrator generator and return SSE event strings."""
-    events = []
-    async for event in _run_orchestrator_workflow(files, vehicle_info, plan=plan):
-        events.append(event)
-    return events
-
-
 async def _run_orchestrator_workflow(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
@@ -376,7 +448,6 @@ async def _run_orchestrator_workflow(
     use_face_path: bool = True,
 ) -> Generator[str, None, None]:
     """Async generator that yields SSE events from the orchestrator workflow."""
-    from agents.output_validator import validate_and_enrich
     from agents.planner_agent import get_coverage_summary, plan_to_location_map
 
     try:
@@ -509,18 +580,20 @@ async def _run_orchestrator_workflow(
 def _assess_workflow_sync(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
+    plan: Optional[Dict[str, Any]] = None,
 ) -> Generator[str, None, None]:
     """Synchronous wrapper around the async agent workflow."""
-    yield from async_to_sync(_collect_assess_events)(files, vehicle_info)
+    yield from async_to_sync(_collect_assess_events)(files, vehicle_info, plan=plan)
 
 
 async def _collect_assess_events(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
+    plan: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Consume the async generator and return a list of SSE event strings."""
     events = []
-    async for event in _run_assess_workflow(files, vehicle_info):
+    async for event in _run_assess_workflow(files, vehicle_info, plan=plan):
         events.append(event)
     return events
 
@@ -528,11 +601,15 @@ async def _collect_assess_events(
 async def _run_assess_workflow(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
+    plan: Optional[Dict[str, Any]] = None,
 ) -> Generator[str, None, None]:
     """Async generator that yields SSE events.
 
     This is the original workflow logic; it is consumed by the synchronous
-    ``_assess_workflow_sync`` wrapper so the view can run under WSGI.
+    ``_assess_workflow_sync`` wrapper so the view can run under WSGI.  The
+    ``plan`` argument lets a caller supply a pre-built planner output (e.g.
+    from a manual ``?views=photo:view`` override) so the legacy pipeline
+    honours the same explicit-plan affordance as the orchestrator path.
     """
 
     try:
@@ -605,25 +682,59 @@ async def _run_assess_workflow(
             async with semaphore:
                 return await photo_locator_agent(batch, vehicle_prior)
 
-        batch_results = await asyncio.gather(*[locate_batch(b) for b in batches])
+        if plan and plan.get("view_groups"):
+            # Honour the explicit plan supplied by the caller (e.g. a manual
+            # ?views=... override).  Each photo's view_group entry carries
+            # _planner_view / _planner_confidence / _planner_reason, which
+            # we surface as the location_map below.
+            location_map = {}
+            for view_id, group in plan.get("view_groups", {}).items():
+                if not isinstance(group, list):
+                    continue
+                for photo in group:
+                    photo_id = photo.get("id")
+                    if not photo_id:
+                        continue
+                    location_map[photo_id] = {
+                        "photo_id": photo_id,
+                        "location": view_id,
+                        "location_detail": photo.get("_planner_reason") or "用户手动指定",
+                        "primary_anchor": view_id,
+                        "confidence": photo.get("_planner_confidence", "low"),
+                        "reason": photo.get("_planner_reason", ""),
+                        "visible_parts": [],
+                    }
+            for f in files:
+                if f["id"] not in location_map:
+                    location_map[f["id"]] = {
+                        "photo_id": f["id"],
+                        "location": "无法定位",
+                        "location_detail": "未在 plan 中指定",
+                        "primary_anchor": "无",
+                        "confidence": "low",
+                        "reason": "用户未指定该照片视角",
+                        "visible_parts": [],
+                    }
+        else:
+            batch_results = await asyncio.gather(*[locate_batch(b) for b in batches])
 
-        all_locations = []
-        for result in batch_results:
-            if isinstance(result, list):
-                all_locations.extend(result)
+            all_locations = []
+            for result in batch_results:
+                if isinstance(result, list):
+                    all_locations.extend(result)
 
-        location_map = {loc.get("photo_id"): loc for loc in all_locations}
-        for f in files:
-            if f["id"] not in location_map:
-                location_map[f["id"]] = {
-                    "photo_id": f["id"],
-                    "location": "无法定位",
-                    "location_detail": "未返回定位结果",
-                    "primary_anchor": "无",
-                    "confidence": "low",
-                    "reason": "模型未返回该照片定位",
-                    "visible_parts": [],
-                }
+            location_map = {loc.get("photo_id"): loc for loc in all_locations}
+            for f in files:
+                if f["id"] not in location_map:
+                    location_map[f["id"]] = {
+                        "photo_id": f["id"],
+                        "location": "无法定位",
+                        "location_detail": "未返回定位结果",
+                        "primary_anchor": "无",
+                        "confidence": "low",
+                        "reason": "模型未返回该照片定位",
+                        "visible_parts": [],
+                    }
 
         yield _sse_event("locations", {"locations": list(location_map.values())})
 

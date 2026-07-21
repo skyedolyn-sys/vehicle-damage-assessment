@@ -1,7 +1,6 @@
-import json
 import logging
 from typing import List, Dict, Any, Optional, Set
-from config import PARTS_CATALOG, PARTS_BY_ID, PARTS_TOPOLOGY
+from config import PARTS_BY_ID, PARTS_TOPOLOGY
 from models.part_state import PartActualState
 from models.topology import VehicleTopology
 

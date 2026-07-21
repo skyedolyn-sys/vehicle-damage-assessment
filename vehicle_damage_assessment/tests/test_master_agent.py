@@ -379,16 +379,21 @@ async def test_master_agent_dispatches_view_agent_per_exterior_photo():
                 regions={"front": ["hood"]},
             )
             mock_topology.return_value = topology
-            with patch("agents.master_agent.planner_agent", new=AsyncMock(return_value=fake_plan)):
-                with patch("agents.master_agent.view_agent", new=AsyncMock(side_effect=fake_view_agent)):
-                    with patch("agents.master_agent.reviewer_subagent", new=AsyncMock(return_value={
-                        "reviewed_parts": [],
-                        "reviewed_part_actual_states": [],
-                    })):
-                        result = await master_assessment_agent(
-                            [{"id": "a", "path": "/a.png"}, {"id": "b", "path": "/b.png"}, {"id": "c", "path": "/c.png"}],
-                            {"vehicle_name": "Test"},
-                        )
+            # face_profiler is now the default entry point under
+            # use_face_path=True.  Return empty so master_agent falls
+            # through to view_agent for each exterior photo.
+            with patch("agents.master_agent.face_profiler_agent",
+                       new=AsyncMock(return_value={})):
+                with patch("agents.master_agent.planner_agent", new=AsyncMock(return_value=fake_plan)):
+                    with patch("agents.master_agent.view_agent", new=AsyncMock(side_effect=fake_view_agent)):
+                        with patch("agents.master_agent.reviewer_subagent", new=AsyncMock(return_value={
+                            "reviewed_parts": [],
+                            "reviewed_part_actual_states": [],
+                        })):
+                            result = await master_assessment_agent(
+                                [{"id": "a", "path": "/a.png"}, {"id": "b", "path": "/b.png"}, {"id": "c", "path": "/c.png"}],
+                                {"vehicle_name": "Test"},
+                            )
 
     assert result is not None
     # Two exterior photos should produce two view_agent calls.

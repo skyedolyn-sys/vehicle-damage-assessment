@@ -17,9 +17,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from agents.minimax_client import build_image_content
 from agents.face_mapping import align_profile_ids, build_face_prior
 from agents.face_profiler import face_profiler_agent
 from agents.planner_agent import planner_agent
@@ -40,19 +39,19 @@ from models import DamageAssessment, PartActualState
 
 logger = logging.getLogger(__name__)
 
-_master_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_master.log"), mode="a", encoding="utf-8"
-)
-_master_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_master_file_handler.setLevel(logging.INFO)
-logger.addHandler(_master_file_handler)
+# Centralized file logging — see agents/_log_init.py for the dedup + reload
+# story.  Replaces a per-import FileHandler that crashed on read-only $HOME
+# and accumulated duplicates under Django runserver autoreload.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "master.log")
 logger.setLevel(logging.INFO)
 
 # C3/C4/D3 silent-node logging (commit d91cb3a).  These subagents emit
 # logger.info summaries from inside their own modules; without an explicit
 # FileHandler on their loggers, the messages propagate up but never reach
-# the disk because no root logger has a handler attached.  Attach the same
-# master file handler to each so audit lines land in the master log.
+# the disk because no root logger has a handler attached.  Each silent
+# module gets its own log file under logs/ so an operator can grep one
+# module without wading through the others.
 #
 # The root logger is WARNING-level (Django default), which would suppress
 # INFO summaries even with a handler attached; explicitly set each
@@ -63,7 +62,7 @@ for _silent_module in (
     "agents.reviewer_subagent",
 ):
     sl = logging.getLogger(_silent_module)
-    sl.addHandler(_master_file_handler)
+    attach_file_handler(sl, f"{_silent_module.split('.')[-1]}.log")
     sl.setLevel(logging.INFO)
 
 
@@ -71,21 +70,29 @@ async def master_assessment_agent(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Optional[Dict[str, Any]] = None,
-    use_face_path: bool = False,
+    use_face_path: bool = True,
 ) -> DamageAssessment:
     """Run the full assessment pipeline using the ViewAgent Team architecture.
 
     Parameters
     ----------
     use_face_path:
-        When ``False`` (default) the legacy path is preserved unchanged: each
+        When ``False`` the legacy path is preserved unchanged: each
         ViewAgent self-derives its camera view and applies the Step B flip.
-        When ``True`` the new face path is used: a ``face_profiler`` first
-        determines each photo's facing + visible-face coverage, deterministic
-        ``face_mapping`` flips that into a locked ``camera_side`` and a
-        candidate part set, and ViewAgent then only assesses damage inside
-        that set (no self-facing, no flip).  This removes the left/right
-        mirror-flip failure mode at the root.
+        When ``True`` (default — matches the production pipeline verified on
+        the 172852 sample, 12 true-damaged vs the legacy path's 23
+        false-positive flips) the new face path is used: a ``face_profiler``
+        first determines each photo's facing + visible-face coverage,
+        deterministic ``face_mapping`` flips that into a locked
+        ``camera_side`` and a candidate part set, and ViewAgent then only
+        assesses damage inside that set (no self-facing, no flip).  This
+        removes the left/right mirror-flip failure mode at the root.
+
+        Default flipped from ``False`` to ``True`` so direct callers
+        (notebooks, ad-hoc scripts) get the production behaviour without
+        having to remember the flag.  Pre-existing stability scripts that
+        explicitly compared the two paths must pass
+        ``use_face_path=False`` themselves.
 
     Parameters
     ----------
@@ -253,11 +260,27 @@ async def master_assessment_agent(
     assessment = compare_topology(topology, actual_states)
     assessment._plan = plan  # type: ignore[attr-defined]
 
+    # 10. Carry the synthesizer's "needs human review" items through to the
+    # legacy result so the UI's "不确定项 / 需人工复核" panel is populated.
+    # The orchestrator path was previously dropping these because the legacy
+    # view_agent path was the only one consuming them.  Reviewer additions
+    # are merged on top, deduped by part_id.
+    synth_uncertain = list(merged.get("uncertain_items", []) or [])
+    review_added = list(review.get("added_uncertain_items", []) or [])
+    if review_added:
+        seen_ids = {item.get("part_id") for item in synth_uncertain}
+        for item in review_added:
+            if item.get("part_id") not in seen_ids:
+                synth_uncertain.append(item)
+                seen_ids.add(item.get("part_id"))
+    assessment.uncertain_items = synth_uncertain
+
     logger.info(
-        "[master] done findings=%d damaged=%d uncertain=%d",
+        "[master] done findings=%d damaged=%d uncertain=%d review_items=%d",
         len(assessment.parts),
         len(assessment.damaged_parts),
         len(assessment.uncertain_parts),
+        len(assessment.uncertain_items),
     )
     return assessment
 

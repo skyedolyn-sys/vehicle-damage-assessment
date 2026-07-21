@@ -154,7 +154,11 @@ async def test_assessment_orchestrator_integration():
             with patch("agents.master_agent.planner_agent", new=AsyncMock(return_value=fake_plan)):
                 with patch("agents.master_agent.view_agent", new=AsyncMock(side_effect=[fake_view_a, fake_view_b])):
                     with patch("agents.master_agent.reviewer_subagent", new=AsyncMock(return_value=fake_review)):
-                        result = await assessment_orchestrator(files, vehicle_info)
+                        # face_profiler is the default entry point under
+                        # use_face_path=True; return empty so view_agent runs.
+                        with patch("agents.master_agent.face_profiler_agent",
+                                   new=AsyncMock(return_value={})):
+                            result = await assessment_orchestrator(files, vehicle_info)
 
     assert "parts" in result
     part_ids = {p["part_id"] for p in result["parts"]}

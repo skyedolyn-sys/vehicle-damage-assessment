@@ -62,20 +62,6 @@ _HIGH_SENSITIVITY_PARTS = {
     "hood", "trunk_lid",
 }
 
-#: Mapping from view id to a (region, side) tag so we can prefer conclusions
-#: from a view that is the canonical vantage for a part.
-_VIEW_REGION_TAG: Dict[str, str] = {
-    "front": "front",
-    "front_left": "front_left",
-    "front_right": "front_right",
-    "rear": "rear",
-    "rear_left": "rear_left",
-    "rear_right": "rear_right",
-    "left": "left",
-    "right": "right",
-    "top": "roof",
-}
-
 
 #: View priorities for each critical part: lower number = more authoritative.
 #: Loaded from agents/rules/config/view_weights.yaml#part_view_priority.
@@ -485,6 +471,3 @@ def apply_fusion(
     return overrides
 
 
-def merge_uncertain_evidence(uncertain_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Drop uncertain items that are now covered by a fused override."""
-    return list(uncertain_items)

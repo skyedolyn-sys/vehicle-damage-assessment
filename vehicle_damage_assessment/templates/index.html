@@ -95,6 +95,37 @@
             grid-template-columns: repeat(3, 1fr);
             gap: 20px;
         }
+
+        /* API key card — narrower than the vehicle-info row, with a status
+           pill so the user can see at a glance whether a custom key is in
+           use or the server's env default is being relied on. */
+        .api-key-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            gap: 12px;
+            align-items: end;
+        }
+        .api-key-row .form-group input {
+            font-family: "SF Mono", Menlo, Monaco, monospace;
+            font-size: 13px;
+        }
+        .api-key-status {
+            font-size: 12px;
+            padding: 10px 14px;
+            border-radius: var(--radius-input);
+            background: var(--bg);
+            color: var(--text-secondary);
+            white-space: nowrap;
+            border: 1px solid var(--border);
+        }
+        .api-key-status.set    { color: var(--success); border-color: var(--success); background: #e1f4e9; }
+        .api-key-status.missing { color: var(--warning); border-color: var(--warning); background: #fdf3d8; }
+        .api-key-hint {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-top: 8px;
+            line-height: 1.5;
+        }
         .form-group label {
             display: block;
             margin-bottom: 6px;
@@ -577,6 +608,46 @@
             </div>
         </div>
 
+        <!-- 1.5. LLM provider (optional override) -->
+        <div class="card">
+            <div class="card-title">
+                <span class="badge-num" style="background: var(--text-secondary);">⚙</span>
+                LLM 接入（可选覆盖）
+            </div>
+            <div class="api-key-row" style="grid-template-columns: 1fr 1fr 1fr;">
+                <div class="form-group">
+                    <label>Provider</label>
+                    <select id="llmProvider">
+                        <option value="">使用服务端默认</option>
+                        <option value="minimax">MiniMax（默认）</option>
+                        <option value="openai">OpenAI 兼容</option>
+                        <option value="anthropic">Anthropic 兼容</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Base URL</label>
+                    <input type="text" id="baseUrl" placeholder="如 https://api.openai.com/v1/chat/completions" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" id="llmModel" placeholder="如 gpt-4o / claude-3-5-sonnet-latest" autocomplete="off">
+                </div>
+            </div>
+            <div class="form-group" style="margin-top: 12px;">
+                <label>API Key</label>
+                <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: end;">
+                    <input type="password" id="apiKey" placeholder="留空使用服务端环境变量" autocomplete="off">
+                    <div class="api-key-status" id="apiKeyStatus">未设置，使用服务端默认</div>
+                    <button type="button" class="btn btn-text" id="saveApiKeyBtn">保存到本地</button>
+                </div>
+            </div>
+            <div class="api-key-hint">
+                全部留空 → 使用服务端 <code>MINIMAX_API_KEY</code> / <code>MINIMAX_BASE_URL</code> / <code>MINIMAX_MODEL</code>；
+                填入 → 临时覆盖（仅保存在浏览器 <code>localStorage</code>，不会写回服务端 .env）。
+                三种协议：MiniMax 与 OpenAI 都是 <code>/chat/completions</code> + Bearer；Anthropic 用 <code>/messages</code> + <code>x-api-key</code>。
+            </div>
+        </div>
+
         <!-- 2. 上传照片文件夹 -->
         <div class="card">
             <div class="card-title">
@@ -672,6 +743,82 @@
         const progressFill = document.getElementById('progressFill');
         const log = document.getElementById('log');
 
+        // ── LLM provider — optional per-browser override ───────────────────────
+        // The UI forwards ?provider=&api_key=&base_url=&model= on the SSE
+        // request.  The server swaps them in via _LLMOverride for the
+        // duration of one assessment.  Anything left blank falls back to
+        // the server's env default.  Values are stored in localStorage so a
+        // developer A/B-ing between providers doesn't retype on every load.
+        const apiKeyInput = document.getElementById('apiKey');
+        const apiKeyStatus = document.getElementById('apiKeyStatus');
+        const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+        const llmProviderInput = document.getElementById('llmProvider');
+        const baseUrlInput = document.getElementById('baseUrl');
+        const llmModelInput = document.getElementById('llmModel');
+
+        const _LLM_STORE_KEY = 'vda_llm_overrides_v2';
+
+        function _readStoredOverrides() {
+            try {
+                const raw = localStorage.getItem(_LLM_STORE_KEY);
+                return raw ? JSON.parse(raw) : {};
+            } catch { return {}; }
+        }
+        function _writeStoredOverrides(obj) {
+            try {
+                const clean = {};
+                if (obj.provider) clean.provider = String(obj.provider);
+                if (obj.apiKey) clean.apiKey = String(obj.apiKey);
+                if (obj.baseUrl) clean.baseUrl = String(obj.baseUrl);
+                if (obj.model) clean.model = String(obj.model);
+                if (Object.keys(clean).length === 0) {
+                    localStorage.removeItem(_LLM_STORE_KEY);
+                } else {
+                    localStorage.setItem(_LLM_STORE_KEY, JSON.stringify(clean));
+                }
+            } catch { /* localStorage disabled — silently ignore */ }
+        }
+        function refreshApiKeyStatus() {
+            const parts = [];
+            if (llmProviderInput.value) parts.push(`provider=${llmProviderInput.value}`);
+            if (baseUrlInput.value) parts.push(`base_url=…${baseUrlInput.value.slice(-12)}`);
+            if (llmModelInput.value) parts.push(`model=${llmModelInput.value}`);
+            const v = (apiKeyInput.value || '').trim();
+            if (v) parts.push(`key (len ${v.length})`);
+
+            if (parts.length === 0) {
+                apiKeyStatus.textContent = '未设置，使用服务端默认';
+                apiKeyStatus.classList.add('missing');
+                apiKeyStatus.classList.remove('set');
+            } else {
+                apiKeyStatus.textContent = '✓ ' + parts.join(' · ');
+                apiKeyStatus.classList.add('set');
+                apiKeyStatus.classList.remove('missing');
+            }
+        }
+
+        const _stored = _readStoredOverrides();
+        llmProviderInput.value = _stored.provider || '';
+        baseUrlInput.value = _stored.baseUrl || '';
+        llmModelInput.value = _stored.model || '';
+        apiKeyInput.value = _stored.apiKey || '';
+        refreshApiKeyStatus();
+
+        for (const el of [llmProviderInput, baseUrlInput, llmModelInput, apiKeyInput]) {
+            el.addEventListener('input', refreshApiKeyStatus);
+        }
+        saveApiKeyBtn.addEventListener('click', () => {
+            _writeStoredOverrides({
+                provider: llmProviderInput.value,
+                baseUrl: baseUrlInput.value,
+                model: llmModelInput.value,
+                apiKey: apiKeyInput.value,
+            });
+            refreshApiKeyStatus();
+            saveApiKeyBtn.textContent = '✓ 已保存';
+            setTimeout(() => { saveApiKeyBtn.textContent = '保存到本地'; }, 1500);
+        });
+
         function acceptFiles(fileArr) {
             selectedFiles = fileArr.filter(f =>
                 /\.(png|jpg|jpeg|webp|gif|bmp)$/i.test(f.name)
@@ -732,18 +879,8 @@
         }
 
         // ── 整体结论卡片的两个 helper ────────────────────────────────────
-        // 把 structural_patterns 的 pattern_id 翻译成中文短句 + 视觉色级
-        // (red = 严重, orange = 警告, blue = 信息)。  翻 human-readable 文案
-        // 让前端不需要解析 "Region 'right' has 6 damaged/missing parts …" 这串
-        // 英文,而是直接展示"右侧 6 个部件大面积受损"。
-        const PATTERN_LABELS = {
-            regional_mass_damage:    { label: '区域大面积损伤',   severity: 'red'    },
-            cross_region_penetration: { label: '跨区域穿透损伤',   severity: 'red'    },
-            structural_component_damage: { label: '结构件受损',  severity: 'red'    },
-            symmetric_damage:        { label: '对称损伤',         severity: 'orange' },
-            safety_critical_missing: { label: '关键安全件缺失',    severity: 'red'    },
-        };
-        // pattern_id → 中文"建议一句话" (用于结论卡底部)
+        // pattern_id → 维修建议 (后端已经返回了中文 pattern_name 和 severity,
+        // 这里只补充 advice,因为 advice 是 UI 专属、API 不暴露)
         const PATTERN_ADVICE = {
             regional_mass_damage:    '该区域多个部件同时损坏，维修时需按整体变形修复而非单件更换。',
             cross_region_penetration: '损伤沿车身穿透相连，建议优先确认车架结构完整性。',
@@ -751,6 +888,9 @@
             symmetric_damage: '左右对称损伤通常意味着翻滚或多次碰撞，需复核现场照片。',
             safety_critical_missing: '关键安全件缺失，车辆不可继续行驶。',
         };
+        // severity → 视觉色级 (后端给的是 "severe"/"moderate"/"light",
+        // 前端只需负责把这两个词映成卡片配色)
+        const SEVERITY_COLOR = { severe: 'red', moderate: 'orange', light: 'blue' };
 
         function buildInsightCards(patterns) {
             if (!patterns || !patterns.length) {
@@ -760,19 +900,16 @@
             const seen = new Set();
             const cards = [];
             for (const p of patterns) {
-                const meta = PATTERN_LABELS[p.pattern_id];
-                if (!meta || seen.has(p.pattern_id)) continue;
+                if (!p.pattern_name || seen.has(p.pattern_id)) continue;
                 seen.add(p.pattern_id);
                 const advice = PATTERN_ADVICE[p.pattern_id] || '';
-                // 从 description 中提取"X 个部件"或"X regions"作为关键数字
-                const countMatch = p.description && p.description.match(/(\d+)/);
-                const countText = countMatch ? countMatch[1] : '';
+                const color = SEVERITY_COLOR[p.severity] || 'blue';
                 const matched = (p.matched_nodes || []).length;
                 cards.push(`
-                    <div class="insight-card ${meta.severity}">
+                    <div class="insight-card ${color}">
                         <div class="insight-head">
                             <span class="insight-dot"></span>
-                            <span class="insight-title">${escapeHtml(meta.label)}</span>
+                            <span class="insight-title">${escapeHtml(p.pattern_name)}</span>
                             ${matched
                                 ? `<span class="insight-count">${matched} 个部件</span>`
                                 : ''}
@@ -837,8 +974,23 @@
                 const brand = encodeURIComponent(document.getElementById('brand').value);
                 const model = encodeURIComponent(document.getElementById('model').value);
                 const year = encodeURIComponent(document.getElementById('year').value);
+                // Forward any user-supplied LLM overrides as query params.
+                // EventSource can't set request headers in the browser, so
+                // the values ride as ?provider=...&api_key=...&base_url=...
+                // &model=... and the server validates each path.  Empty
+                // values are dropped so the server-side default is used.
+                const llmQS = [];
+                const _providerVal = (llmProviderInput.value || '').trim();
+                const _apiKeyVal = (apiKeyInput.value || '').trim();
+                const _baseUrlVal = (baseUrlInput.value || '').trim();
+                const _llmModelVal = (llmModelInput.value || '').trim();
+                if (_providerVal) llmQS.push(`provider=${encodeURIComponent(_providerVal)}`);
+                if (_apiKeyVal)   llmQS.push(`api_key=${encodeURIComponent(_apiKeyVal)}`);
+                if (_baseUrlVal)  llmQS.push(`base_url=${encodeURIComponent(_baseUrlVal)}`);
+                if (_llmModelVal) llmQS.push(`model=${encodeURIComponent(_llmModelVal)}`);
+                const llmQSsuffix = llmQS.length ? `&${llmQS.join('&')}` : '';
                 const eventSource = new EventSource(
-                    `/api/assess/${taskId}?brand=${brand}&model=${model}&year=${year}`
+                    `/api/assess/${taskId}?brand=${brand}&model=${model}&year=${year}${llmQSsuffix}`
                 );
 
                 eventSource.addEventListener('step', (e) => {
@@ -882,9 +1034,9 @@
             const isSevere = summary.structural_damage_flag;
             const patterns = data.structural_patterns || [];
             const damagedCount = summary.damaged_parts_count || 0;
-            const primaryZone = (summary.primary_damage_zone || '').toLowerCase();
-            const primaryZoneCn = REGION_CN[primaryZone] || primaryZone || '—';
-            const topParts = topDamagedParts(data.parts || [], 6);
+            const severityLabel = summary.overall_severity || '-';
+            const primaryZoneCn = REGION_CN[(summary.primary_damage_zone || '').toLowerCase()] || '—';
+            const topParts = topDamagedParts(data.parts || []);
 
             document.getElementById('resultSummary').innerHTML = `
                 <div class="summary-grid">
@@ -905,7 +1057,7 @@
                         <div class="label">缺失/脱落</div>
                     </div>
                     <div class="summary-card ${isSevere ? 'severe' : ''}">
-                        <div class="value">${summary.overall_severity || '-'}</div>
+                        <div class="value">${escapeHtml(severityLabel)}</div>
                         <div class="label">整体严重等级</div>
                     </div>
                     <div class="summary-card ${isSevere ? 'severe' : 'success'}">
@@ -926,7 +1078,7 @@
                     </div>
                     <div class="finding-meta">
                         <span class="meta-pill zone">主损伤区：<b>${escapeHtml(primaryZoneCn)}</b></span>
-                        <span class="meta-pill severity">整体严重等级：<b>${escapeHtml(summary.overall_severity || '-')}</b></span>
+                        <span class="meta-pill severity">整体严重等级：<b>${escapeHtml(severityLabel)}</b></span>
                         <span class="meta-pill count">受损部件：<b>${damagedCount}</b> / ${(data.parts || []).length}</span>
                     </div>
                     ${patterns.length > 0

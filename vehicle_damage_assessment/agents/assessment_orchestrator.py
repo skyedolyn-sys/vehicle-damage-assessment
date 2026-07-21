@@ -34,12 +34,9 @@ _CONFIDENCE_PRIORITY: Dict[str, int] = _PRIORITIES["confidence"]
 
 
 logger = logging.getLogger(__name__)
-_orchestrator_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_orchestrator.log"), mode="a", encoding="utf-8"
-)
-_orchestrator_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_orchestrator_file_handler.setLevel(logging.INFO)
-logger.addHandler(_orchestrator_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "orchestrator.log")
 logger.setLevel(logging.INFO)
 
 

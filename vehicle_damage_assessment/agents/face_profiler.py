@@ -23,16 +23,9 @@ from agents.minimax_client import build_image_content, call_minimax, extract_jso
 from config import IMAGE_MAX_WIDTH
 
 logger = logging.getLogger(__name__)
-_faceprofiler_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_faceprofiler.log"),
-    mode="a",
-    encoding="utf-8",
-)
-_faceprofiler_file_handler.setFormatter(
-    logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-)
-_faceprofiler_file_handler.setLevel(logging.INFO)
-logger.addHandler(_faceprofiler_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "faceprofiler.log")
 logger.setLevel(logging.INFO)
 
 # Faces the model is allowed to emit.  ``side`` is a side-agnostic marker for

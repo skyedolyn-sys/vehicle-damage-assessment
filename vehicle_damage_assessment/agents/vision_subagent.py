@@ -24,13 +24,9 @@ from config import IMAGE_MAX_WIDTH, PARTS_BY_ID
 from models import PartActualState, Status, DamageLevel
 
 logger = logging.getLogger(__name__)
-# Dedicated file log so Django console log level does not swallow subagent diagnostics.
-_vision_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_vision.log"), mode="a", encoding="utf-8"
-)
-_vision_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_vision_file_handler.setLevel(logging.INFO)
-logger.addHandler(_vision_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "vision.log")
 logger.setLevel(logging.INFO)
 
 

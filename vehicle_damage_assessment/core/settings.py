@@ -3,6 +3,7 @@ Django settings for vehicle_damage_assessment project.
 """
 
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -15,12 +16,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
-SECRET_KEY = os.getenv(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-dev-only-change-me-in-production",
-)
+# Local-dev fallback: Django refuses to start when SECRET_KEY is empty or
+# has the "django-insecure-" prefix under DEBUG=False.  Older code shipped
+# a hardcoded insecure default that worked fine while DEBUG defaulted to
+# True; flipping the default to False (commit on delivery-hygiene pass)
+# exposed that bug.  This generates a per-process random dev key so local
+# runs boot without requiring every developer to set DJANGO_SECRET_KEY in
+# .env, while still flagging the situation to ``check --deploy``.
+_DEV_SECRET_KEY = "dev-local-" + secrets.token_urlsafe(32)
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", _DEV_SECRET_KEY)
 
-DEBUG = os.getenv("DEBUG", "True").lower() in ("true", "1", "yes")
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
@@ -128,7 +134,17 @@ MEDIA_ROOT = BASE_DIR / "uploads"
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
-CORS_ALLOW_ALL_ORIGINS = True
+# Default to an allowlist driven by CORS_ALLOWED_ORIGINS.  Only when that
+# env var is unset AND DEBUG is on do we fall back to allowing all origins —
+# this keeps local `python manage.py runserver` friction-free while making
+# production deploys explicit.  Set CORS_ALLOWED_ORIGINS= when ready.
+_cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_env:
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()]
+    CORS_ALLOW_ALL_ORIGINS = False
+else:
+    CORS_ALLOWED_ORIGINS = []
+    CORS_ALLOW_ALL_ORIGINS = DEBUG
 
 
 # ---------------------------------------------------------------------------

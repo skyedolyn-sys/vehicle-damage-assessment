@@ -10,22 +10,30 @@ import time
 from typing import List, Tuple, Dict, Any
 from config import MINIMAX_API_KEY, MINIMAX_BASE_URL, MINIMAX_MODEL, REQUEST_TIMEOUT
 from agents.image_utils import compress_image_to_base64
+from agents.llm_client import (
+    LLMConfig,
+    PROVIDER_MINIMAX,
+    PROVIDER_OPENAI,
+    PROVIDER_ANTHROPIC,
+    call_llm,
+)
 
 logger = logging.getLogger(__name__)
 # Dedicated file log for API diagnostics; Django console log level may swallow INFO.
-_minimax_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_minimax.log"), mode="a", encoding="utf-8"
-)
-_minimax_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_minimax_file_handler.setLevel(logging.INFO)
-logger.addHandler(_minimax_file_handler)
+# Centralized through agents._log_init so Django runserver autoreload does not
+# stack duplicate FileHandlers on the same log file.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "minimax.log")
 logger.setLevel(logging.INFO)
 
-# 临时处理 macOS SSL 证书问题
-# 生产环境应安装 certifi 或正确配置证书
-SSL_CONTEXT = ssl.create_default_context()
-SSL_CONTEXT.check_hostname = False
-SSL_CONTEXT.verify_mode = ssl.CERT_NONE
+# Verify TLS certificates via the certifi bundle.  Falls back to the system
+# default trust store if certifi is not installed (rare — only in minimal
+# containers where the user can install it explicitly).
+try:
+    import certifi
+    SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:  # pragma: no cover
+    SSL_CONTEXT = ssl.create_default_context()
 
 
 import random
@@ -39,7 +47,17 @@ async def call_minimax(
     reasoning_effort: str | None = None,
     max_escalation_tokens: int | None = None,
 ) -> str:
-    """调用 MiniMax OpenAI 兼容接口（带重试和指数退避）。
+    """Call the active LLM provider and return the assistant text.
+
+    For ``LLM_PROVIDER=minimax`` (default) this uses the carefully tuned
+    retry + token-escalation loop below — MiniMax M3 sometimes burns the
+    whole ``max_tokens`` budget on a single ``<think>...</think>`` block
+    (``finish_reason == "length"``), and we escalate to recover.
+
+    For ``LLM_PROVIDER=openai`` or ``anthropic`` we delegate to
+    ``agents.llm_client.call_llm``, which speaks the respective native
+    protocol without retry.  The MiniMax retry logic is unnecessary on
+    OpenAI/Anthropic endpoints (they have their own server-side retry).
 
     Truncation handling: MiniMax M3 sometimes spends the whole ``max_tokens``
     budget inside a single ``<think>...</think>`` block and emits no JSON body
@@ -48,6 +66,30 @@ async def call_minimax(
     so the model has room for both reasoning and the JSON answer.
     ``max_escalation_tokens`` caps that escalation (default: 2× ``max_tokens``).
     """
+    provider = (os.environ.get("LLM_PROVIDER") or PROVIDER_MINIMAX).strip().lower()
+    if provider in (PROVIDER_OPENAI, PROVIDER_ANTHROPIC):
+        # Build an LLMConfig from the current request's overrides.  The
+        # config module's MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_MODEL
+        # are swapped by api.views._ApiKeyOverride when the UI sends
+        # ?api_key=... / ?base_url=... / ?model=... — so this picks them
+        # up automatically.
+        cfg = LLMConfig(
+            provider=provider,
+            api_key=MINIMAX_API_KEY,
+            base_url=MINIMAX_BASE_URL,
+            model=model or MINIMAX_MODEL,
+        )
+        raw = await call_llm(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+            response_format=response_format,
+            config=cfg,
+            timeout=REQUEST_TIMEOUT,
+        )
+        return clean_minimax_output(raw) if raw else raw
+
     call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
     request_model = model or MINIMAX_MODEL
     if max_escalation_tokens is None:

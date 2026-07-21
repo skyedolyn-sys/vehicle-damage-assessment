@@ -18,28 +18,21 @@ from typing import Any, Dict, List, Optional
 
 from agents.minimax_client import call_minimax, build_image_content, extract_json
 from agents.rules import render_prompt_template
-from agents.view_mapping import get_parts_for_view, get_display_name
+from agents.view_mapping import get_parts_for_view
 from config import IMAGE_MAX_WIDTH, MINIMAX_MODEL, PARTS_BY_ID
 from models import PartActualState, Status, DamageLevel
 
 logger = logging.getLogger(__name__)
 
-_view_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_view.log"), mode="a", encoding="utf-8"
-)
-_view_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_view_file_handler.setLevel(logging.INFO)
-logger.addHandler(_view_file_handler)
+# Centralized file logging — see agents/_log_init.py.  Two log streams:
+#  - view.log       — full diagnostic log (rotates by append, dedup-safe)
+#  - view_trace.log — one-line-per-photo trace for human auditability;
+#    mode="a" preserves history across Django runserver reloads (the old
+#    mode="w" silently truncated the file on every import).
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "view.log")
+attach_file_handler(logger, "view_trace.log", level=logging.INFO)
 logger.setLevel(logging.INFO)
-
-# Dedicated trace log for per-photo verdicts so the human auditor can read
-# 32 one-line summaries without scrolling through other diagnostic output.
-_view_trace_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_view_trace.log"), mode="w", encoding="utf-8"
-)
-_view_trace_handler.setFormatter(logging.Formatter("%(message)s"))
-_view_trace_handler.setLevel(logging.INFO)
-logger.addHandler(_view_trace_handler)
 
 
 #: Status ordering for conservative aggregation.
@@ -191,10 +184,8 @@ async def view_agent(
     # so we can audit whether it noticed "右后视镜朝外/车标在右" cues.
     _dump_minimax_raw(photo_id, raw)
 
-    if face_prior:
-        candidate_set = set((face_prior.get("candidate_parts") or {}).keys())
-    else:
-        candidate_set = None
+    candidate_parts = face_prior.get("candidate_parts") or {} if face_prior else {}
+    candidate_set = set(candidate_parts.keys()) if candidate_parts else None
     result = _normalize_view_agent_result(photo_id, raw, candidate_set)
     if face_prior:
         # Face path: primary_view comes from the deterministic facing, and
@@ -202,7 +193,7 @@ async def view_agent(
         # view checklist), so damage can only be assigned to faces this photo
         # can reliably map.  Out-of-scope parts are never invented.
         result["primary_view"] = _facing_to_view_id(face_prior.get("facing"), face_prior.get("camera_side"))
-        result = _backfill_from_candidates(result, face_prior.get("candidate_parts") or {})
+        result = _backfill_from_candidates(result, candidate_parts)
         if not face_prior.get("usable", True):
             # Soft downgrade: this photo's facing was unclear/low-confidence,
             # so its damage observations are kept as evidence but capped at
@@ -600,41 +591,65 @@ def _calibrate_result_confidence(result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+#: Calibration weights used by ``_calibrate_damage_confidence`` to combine
+#: model score, description keywords, damage-type count, and status into a
+#: single confidence score in ``[0.0, 1.0]``.  Threshold band edges are in
+#: ``_HIGH_CONF_THRESHOLD`` / ``_MEDIUM_CONF_THRESHOLD``.
+#: Calibration was hand-tuned against the 172852 sample; if you A/B against a
+#: new sample, start by changing these and only fall back to feature
+#: changes if the calibration is structurally wrong.
+_DMG_DESC_STRONG = 0.9     # description has 严重/明显/大面积/变形/凹陷/断裂
+_DMG_DESC_LIGHT = 0.6      # description has 轻微/小/局部/细微
+_DMG_DESC_NEUTRAL = 0.4    # description has none of the above
+_DMG_TYPES_DOMINANT = 0.85 # ≥2 distinct damage types
+_DMG_TYPES_SINGLE = 0.7    # exactly 1 damage type
+_DMG_TYPES_NONE = 0.5      # only "none" / no damage types
+_DMG_STATUS_INTACT_OK = 0.9  # status=intact AND description contains 无
+_DMG_STATUS_DAMAGED_OK = 0.8 # status=damaged AND has damage types
+_DMG_STATUS_NEUTRAL = 0.4
+_DMG_BASE_MODEL_SCORE = 0.5  # neutral default when model didn't self-score
+
+#: Confidence-band edges used by ``_score_to_level`` and downstream consumers
+#: to bucket the calibrated score into high / medium / low buckets.
+_HIGH_CONF_THRESHOLD = 0.75
+_MEDIUM_CONF_THRESHOLD = 0.5
+
+
 def _calibrate_damage_confidence(raw: Dict[str, Any]) -> float:
     """Schema §4.2: combine model score, description, damage types, and status."""
-    signals = [float(raw.get("model_confidence_score", 0.5))]
+    signals = [float(raw.get("model_confidence_score", _DMG_BASE_MODEL_SCORE))]
 
     desc = raw.get("description", "")
     if any(kw in desc for kw in ["明显", "严重", "大面积", "变形", "凹陷", "断裂"]):
-        signals.append(0.9)
+        signals.append(_DMG_DESC_STRONG)
     elif any(kw in desc for kw in ["轻微", "小", "局部", "细微"]):
-        signals.append(0.6)
+        signals.append(_DMG_DESC_LIGHT)
     else:
-        signals.append(0.4)
+        signals.append(_DMG_DESC_NEUTRAL)
 
     types = [t for t in raw.get("damage_types", []) if t != "none"]
     if len(types) >= 2:
-        signals.append(0.85)
+        signals.append(_DMG_TYPES_DOMINANT)
     elif len(types) == 1:
-        signals.append(0.7)
+        signals.append(_DMG_TYPES_SINGLE)
     else:
-        signals.append(0.5)
+        signals.append(_DMG_TYPES_NONE)
 
     status = raw.get("status")
     if status == "intact" and "无" in desc:
-        signals.append(0.9)
+        signals.append(_DMG_STATUS_INTACT_OK)
     elif status == "damaged" and types:
-        signals.append(0.8)
+        signals.append(_DMG_STATUS_DAMAGED_OK)
     else:
-        signals.append(0.4)
+        signals.append(_DMG_STATUS_NEUTRAL)
 
     return sum(signals) / len(signals)
 
 
 def _score_to_level(score: float) -> str:
-    if score >= 0.75:
+    if score >= _HIGH_CONF_THRESHOLD:
         return "high"
-    if score >= 0.5:
+    if score >= _MEDIUM_CONF_THRESHOLD:
         return "medium"
     return "low"
 
