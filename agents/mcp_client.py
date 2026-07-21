@@ -26,7 +26,11 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-from config import MINIMAX_BASE_URL, MINIMAX_API_KEY
+# IMPORTANT: do not `from config import MINIMAX_*` here.  The LLM provider
+# override (api.views._LLMOverride) mutates config.MINIMAX_* at request
+# time; reading through the `config` namespace on each call picks the
+# fresh values.
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +98,8 @@ async def _understand_image_via_mcp(
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
     }
-    if MINIMAX_API_KEY:
-        headers["Authorization"] = f"Bearer {MINIMAX_API_KEY}"
+    if config.MINIMAX_API_KEY:
+        headers["Authorization"] = f"Bearer {config.MINIMAX_API_KEY}"
 
     payload = {
         "jsonrpc": "2.0",

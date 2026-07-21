@@ -8,7 +8,12 @@ import aiohttp
 import logging
 import time
 from typing import List, Tuple, Dict, Any
-from config import MINIMAX_API_KEY, MINIMAX_BASE_URL, MINIMAX_MODEL, REQUEST_TIMEOUT
+# IMPORTANT: do not `from config import MINIMAX_*` here.  The LLM provider
+# override (api.views._LLMOverride) mutates config.MINIMAX_* at request
+# time; if we had imported them as bound names at module load, the agent
+# layer would keep reading the OLD values forever.  Instead we read them
+# through the `config` namespace on every call so the swap is visible.
+import config
 from agents.image_utils import compress_image_to_base64
 from agents.llm_client import (
     LLMConfig,
@@ -75,9 +80,9 @@ async def call_minimax(
         # up automatically.
         cfg = LLMConfig(
             provider=provider,
-            api_key=MINIMAX_API_KEY,
-            base_url=MINIMAX_BASE_URL,
-            model=model or MINIMAX_MODEL,
+            api_key=config.MINIMAX_API_KEY,
+            base_url=config.MINIMAX_BASE_URL,
+            model=model or config.MINIMAX_MODEL,
         )
         raw = await call_llm(
             messages,
@@ -86,18 +91,18 @@ async def call_minimax(
             reasoning_effort=reasoning_effort,
             response_format=response_format,
             config=cfg,
-            timeout=REQUEST_TIMEOUT,
+            timeout=config.REQUEST_TIMEOUT,
         )
         return clean_minimax_output(raw) if raw else raw
 
     call_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
-    request_model = model or MINIMAX_MODEL
+    request_model = model or config.MINIMAX_MODEL
     if max_escalation_tokens is None:
         max_escalation_tokens = max_tokens * 2
     logger.info("[minimax:%s] start model=%s temp=%s max_tokens=%s json_mode=%s reasoning=%s", call_id, request_model, temperature, max_tokens, bool(response_format), reasoning_effort)
 
     headers = {
-        "Authorization": f"Bearer {MINIMAX_API_KEY}",
+        "Authorization": f"Bearer {config.MINIMAX_API_KEY}",
         "Content-Type": "application/json",
     }
 
@@ -125,10 +130,10 @@ async def call_minimax(
         connector = aiohttp.TCPConnector(limit=1, force_close=True)
         async with aiohttp.ClientSession(connector=connector) as session:
             async with session.post(
-                MINIMAX_BASE_URL,
+                config.MINIMAX_BASE_URL,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, sock_connect=30),
+                timeout=aiohttp.ClientTimeout(total=config.REQUEST_TIMEOUT, sock_connect=30),
                 ssl=SSL_CONTEXT,
             ) as resp:
                 if resp.status != 200:
