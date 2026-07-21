@@ -74,6 +74,13 @@ $EDITOR .env
 
 所有可调参数（`IMAGE_MAX_WIDTH`、`MAX_CONCURRENT_API_CALLS`、`PHOTO_LOCATOR_BATCH_SIZE` 等）在 `.env.example` 里有说明。
 
+### 3. 跑数据库迁移 + 启动
+
+```bash
+python manage.py migrate         # 首次启动必须,把表结构写到 db.sqlite3
+python manage.py runserver 0.0.0.0:8000
+```
+
 可选：
 
 ```bash
