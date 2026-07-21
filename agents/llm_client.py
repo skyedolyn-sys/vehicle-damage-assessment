@@ -86,33 +86,63 @@ class LLMConfig:
             )
             resolved_provider = PROVIDER_MINIMAX
 
-        resolved_base_url = (base_url or "").strip() or _default_base_url(resolved_provider, _config)
-        # Sanity check: flag common UI mistakes where the user pasted a
-        # MiniMax sub-path under an Anthropic provider (or vice versa).
-        # We log a warning but still proceed, because some providers use
-        # non-standard routing and we don't want to over-restrict.
-        url_lower = resolved_base_url.lower()
-        if resolved_provider == PROVIDER_ANTHROPIC and "anthropic" not in url_lower:
-            logger.warning(
-                "[llm] provider=anthropic but base_url=%s does not mention "
-                "'anthropic'.  Anthropic-compatible endpoints typically live at "
-                "https://api.anthropic.com/v1/messages.",
-                resolved_base_url,
-            )
-        if resolved_provider == PROVIDER_MINIMAX and "/anthropic" in url_lower:
-            logger.warning(
-                "[llm] provider=minimax but base_url=%s has '/anthropic' in it. "
-                "MiniMax-compatible endpoints live at "
-                "https://api.minimaxi.com/v1/chat/completions.",
-                resolved_base_url,
-            )
-
+        resolved_base_url = _normalize_base_url(
+            resolved_provider,
+            (base_url or "").strip() or _default_base_url(resolved_provider, _config),
+        )
         return cls(
             provider=resolved_provider,
             api_key=(api_key or "").strip() or _config.MINIMAX_API_KEY,
             base_url=resolved_base_url,
             model=(model or "").strip() or _default_model(resolved_provider, _config),
         )
+
+
+def _normalize_base_url(provider: str, base_url: str) -> str:
+    """Ensure ``base_url`` is a fully-qualified endpoint for ``provider``.
+
+    Why this exists: every official SDK / vendor doc hands users a *base URL*
+    without the terminal path, and lets the SDK append it.  MiniMax's own
+    quickstart says ``OPENAI_BASE_URL=https://api.minimaxi.com/v1`` and
+    ``ANTHROPIC_BASE_URL=https://api.minimaxi.com/anthropic``.  But this client
+    POSTs to ``base_url`` verbatim, so a user pasting the documented SDK value
+    (``.../v1``) would hit ``404 page not found``.
+
+    The rule depends on the provider, because MiniMax routes protocols by
+    host path (``/v1`` = OpenAI wire, ``/anthropic/v1/...`` = Anthropic wire).
+    Discovered by probing the live service — do not change without re-probing:
+
+    * ``openai`` / ``minimax`` (OpenAI wire): terminal path ``/chat/completions``.
+      ``https://api.minimaxi.com/v1`` → ``.../v1/chat/completions``.
+      ``https://api.openai.com`` → ``https://api.openai.com/chat/completions``.
+    * ``anthropic`` (Anthropic wire): terminal path ``/v1/messages`` under the
+      ``/anthropic`` sub-host on MiniMax, or under the official ``/v1`` path
+      on Anthropic.  ``https://api.minimaxi.com/anthropic`` →
+      ``.../anthropic/v1/messages``; ``https://api.anthropic.com/v1`` →
+      ``.../v1/messages`` (no double ``/v1``).  (NOT ``.../anthropic/messages``
+      — that 404s on MiniMax.)
+
+    The rule accepts "SDK-style base URL" and "full endpoint URL" both,
+    regardless of which the user pastes.  Cross-protocol host mismatch is
+    caught separately in ``api.views._url_matches_provider``.
+    """
+    url = (base_url or "").strip().rstrip("/")
+    if not url:
+        return url
+    if provider == PROVIDER_ANTHROPIC:
+        terminal = "/v1/messages"
+        # Avoid double /v1 when the user already gave us .../v1 (e.g. the
+        # official Anthropic SDK style).  Skip the /v1 segment only when the
+        # base URL doesn't already have its own protocol-prefix sub-path.
+        if url.endswith("/v1") and not url.endswith("/anthropic/v1"):
+            return url + "/messages"
+        if url.lower().endswith(terminal):
+            return url
+        return url + terminal
+    # minimax + openai both speak the OpenAI chat-completions wire format.
+    if url.lower().endswith("/chat/completions"):
+        return url
+    return url + "/chat/completions"
 
 
 def _detect_provider_from_env() -> str:
@@ -214,18 +244,18 @@ async def _call_openai_compatible(
     }
 
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientConnector(ssl=_SSL_CONTEXT, timeout=timeout_obj) as connector:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(
-                cfg.base_url, json=payload, headers=headers
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise RuntimeError(
-                        f"LLM error {resp.status} from openai_compatible at "
-                        f"{cfg.base_url} (auth=Bearer, model={cfg.model}): {text}"
-                    )
-                data = await resp.json()
+    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout_obj) as session:
+        async with session.post(
+            cfg.base_url, json=payload, headers=headers
+        ) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(
+                    f"LLM error {resp.status} from openai_compatible at "
+                    f"{cfg.base_url} (auth=Bearer, model={cfg.model}): {text}"
+                )
+            data = await resp.json()
     return _extract_openai_text(data)
 
 
@@ -285,18 +315,18 @@ async def _call_anthropic(
     }
 
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
-    async with aiohttp.ClientConnector(ssl=_SSL_CONTEXT, timeout=timeout_obj) as connector:
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(
-                cfg.base_url, json=payload, headers=headers
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise RuntimeError(
-                        f"LLM error {resp.status} from anthropic at "
-                        f"{cfg.base_url} (auth=x-api-key, model={cfg.model}): {text}"
-                    )
-                data = await resp.json()
+    connector = aiohttp.TCPConnector(ssl=_SSL_CONTEXT)
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout_obj) as session:
+        async with session.post(
+            cfg.base_url, json=payload, headers=headers
+        ) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise RuntimeError(
+                    f"LLM error {resp.status} from anthropic at "
+                    f"{cfg.base_url} (auth=x-api-key, model={cfg.model}): {text}"
+                )
+            data = await resp.json()
     return _extract_anthropic_text(data)
 
 

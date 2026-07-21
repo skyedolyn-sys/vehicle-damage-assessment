@@ -8,6 +8,7 @@ Django's default WSGI development server; async agent calls are bridged with
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from contextlib import contextmanager
@@ -38,7 +39,42 @@ from api.models import UploadedPhoto, UploadedTask
 from config import MAX_CONCURRENT_API_CALLS, PHOTO_LOCATOR_BATCH_SIZE
 
 
+logger = logging.getLogger(__name__)
+
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
+
+
+#: Canonical default base URLs per provider.  Used to detect when a stored /
+#: forwarded override URL belongs to a DIFFERENT protocol than the selected
+#: provider — the classic failure being a MiniMax key sent to a ``/anthropic``
+#: path (404 page not found) because the browser had a stale base_url cached.
+_PROVIDER_DEFAULT_URLS = {
+    "minimax": "https://api.minimaxi.com/v1/chat/completions",
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "anthropic": "https://api.anthropic.com/v1/messages",
+}
+
+
+def _url_matches_provider(provider: str, base_url: str) -> bool:
+    """Return False when ``base_url`` clearly belongs to a different wire
+    protocol than ``provider``.
+
+    We only flag the unambiguous cross-protocol cases — an Anthropic-style
+    ``/messages`` or ``/anthropic`` path used with a chat-completions provider
+    (minimax/openai), or a chat-completions path used with provider=anthropic.
+    Custom gateways that genuinely route one protocol under another host are
+    left alone (we can't tell those apart and must not over-restrict).
+    """
+    if not provider or not base_url:
+        return True
+    url = base_url.strip().lower()
+    chat_providers = {"minimax", "openai"}
+    looks_anthropic = url.rstrip("/").endswith("/messages") or "/anthropic" in url
+    if provider in chat_providers and looks_anthropic:
+        return False
+    if provider == "anthropic" and url.rstrip("/").endswith("/chat/completions"):
+        return False
+    return True
 
 
 def health(request):
@@ -67,6 +103,26 @@ class _LLMOverride:
     — acceptable here because Django's dev server is single-threaded.
     """
 
+    @classmethod
+    def from_request(cls, request) -> "_LLMOverride":
+        """Build an override from the ``?provider=&api_key=&base_url=&model=``
+        query params the UI forwards.  Empty/missing fields fall back to the
+        env default.  We never log the api_key itself.
+        """
+        return cls(
+            provider=request.GET.get("provider"),
+            api_key=request.GET.get("api_key"),
+            base_url=request.GET.get("base_url"),
+            model=request.GET.get("model"),
+        )
+
+    def has_overrides(self) -> bool:
+        """True when the caller supplied at least one non-empty override."""
+        return any(
+            v is not None
+            for v in (self._provider, self._api_key, self._base_url, self._model)
+        )
+
     def __init__(
         self,
         *,
@@ -94,8 +150,24 @@ class _LLMOverride:
             self._saved_api_key = _config.MINIMAX_API_KEY
             _config.MINIMAX_API_KEY = self._api_key
         if self._base_url is not None:
-            self._saved_base_url = _config.MINIMAX_BASE_URL
-            _config.MINIMAX_BASE_URL = self._base_url
+            # Guard against the classic stale-localStorage failure: the UI
+            # forwards a base_url that belongs to a DIFFERENT protocol than
+            # the selected provider (e.g. provider=minimax with a cached
+            # ".../anthropic" URL → 404 page not found).  Rather than send a
+            # guaranteed-to-fail request, drop the mismatched URL so the
+            # provider's canonical default is used, and warn loudly.
+            if not _url_matches_provider(self._provider or "minimax", self._base_url):
+                logger.warning(
+                    "[llm-override] dropping mismatched base_url %r for provider %r "
+                    "(it belongs to a different protocol); falling back to the "
+                    "provider default %r",
+                    self._base_url,
+                    self._provider,
+                    _PROVIDER_DEFAULT_URLS.get(self._provider or "minimax"),
+                )
+            else:
+                self._saved_base_url = _config.MINIMAX_BASE_URL
+                _config.MINIMAX_BASE_URL = self._base_url
         if self._model is not None:
             self._saved_model = _config.MINIMAX_MODEL
             _config.MINIMAX_MODEL = self._model
@@ -256,100 +328,99 @@ def assess_stream(request, task_id: str):
     # Optional per-request LLM provider override.  The UI lets a developer
     # paste a different provider / api_key / base_url / model in the top
     # form and forward them here; this lets them A/B between MiniMax,
-    # OpenAI, and Anthropic without restarting the server.  Empty/missing
-    # for any field falls back to the env default.  We never log the
-    # api_key itself.
-    override = _LLMOverride(
-        provider=request.GET.get("provider"),
-        api_key=request.GET.get("api_key"),
-        base_url=request.GET.get("base_url"),
-        model=request.GET.get("model"),
-    )
-    override.__enter__()
+    # OpenAI, and Anthropic without restarting the server.
+    #
+    # IMPORTANT: we do NOT enter the override in THIS request thread.  The
+    # StreamingHttpResponse we return below wraps a LAZY generator — the
+    # function body finishes (and any try/finally here would fire) the
+    # instant we `return`, long before Django starts iterating the
+    # generator and the worker thread makes the actual LLM calls.  Entering
+    # the override here would therefore restore the URL/KEY before any
+    # agent ever read them.  Instead we pass the override object down and
+    # enter it inside the worker thread that runs the LLM calls.
+    override = _LLMOverride.from_request(request)
 
     try:
-        try:
-            uuid.UUID(task_id)
-        except ValueError:
-            return StreamingHttpResponse(
-                _error_stream("任务ID格式无效"),
-                content_type="text/event-stream",
+        uuid.UUID(task_id)
+    except ValueError:
+        return StreamingHttpResponse(
+            _error_stream("任务ID格式无效"),
+            content_type="text/event-stream",
+        )
+
+    task = None
+    try:
+        task = UploadedTask.objects.get(task_id=task_id)
+    except UploadedTask.DoesNotExist:
+        pass
+
+    files = []
+    if task is not None:
+        for photo in task.photos.all():
+            files.append(
+                {
+                    "id": photo.photo_id,
+                    "path": photo.file_path,
+                    "name": photo.photo_id,
+                    "url": photo.file_url,
+                }
             )
 
-        task = None
-        try:
-            task = UploadedTask.objects.get(task_id=task_id)
-        except UploadedTask.DoesNotExist:
-            pass
-
-        files = []
-        if task is not None:
-            for photo in task.photos.all():
+    # Backward compatibility: fall back to the filesystem for tasks created
+    # by the previous FastAPI backend.
+    if not files:
+        task_dir = os.path.join(settings.MEDIA_ROOT, task_id)
+        if os.path.isdir(task_dir):
+            for filename in sorted(os.listdir(task_dir)):
+                if not filename.lower().endswith(IMAGE_EXTENSIONS):
+                    continue
+                file_path = os.path.join(task_dir, filename)
+                file_url = f"{settings.BASE_URL}{settings.MEDIA_URL}{task_id}/{filename}"
                 files.append(
                     {
-                        "id": photo.photo_id,
-                        "path": photo.file_path,
-                        "name": photo.photo_id,
-                        "url": photo.file_url,
+                        "id": filename,
+                        "path": file_path,
+                        "name": filename,
+                        "url": file_url,
                     }
                 )
 
-        # Backward compatibility: fall back to the filesystem for tasks created
-        # by the previous FastAPI backend.
-        if not files:
-            task_dir = os.path.join(settings.MEDIA_ROOT, task_id)
-            if os.path.isdir(task_dir):
-                for filename in sorted(os.listdir(task_dir)):
-                    if not filename.lower().endswith(IMAGE_EXTENSIONS):
-                        continue
-                    file_path = os.path.join(task_dir, filename)
-                    file_url = f"{settings.BASE_URL}{settings.MEDIA_URL}{task_id}/{filename}"
-                    files.append(
-                        {
-                            "id": filename,
-                            "path": file_path,
-                            "name": filename,
-                            "url": file_url,
-                        }
-                    )
-
-        if not files:
-            return StreamingHttpResponse(
-                _error_stream("任务不存在"),
-                content_type="text/event-stream",
-            )
-
-        # Optional manual view override: ?views=photo1:front_left,photo2:front_right
-        view_override = _parse_view_override(request.GET.get("views", ""))
-        explicit_plan = None
-        if view_override:
-            explicit_plan = _build_plan_from_view_override(files, view_override)
-
-        # Feature flag: use new orchestrator by default; allow fallback to legacy pipeline.
-        use_orchestrator = request.GET.get("legacy", "").lower() not in ("true", "1", "yes")
-        if use_orchestrator:
-            # Feature flag: default the orchestrator onto the new face path (face_profiler
-            # + deterministic camera_side + candidate-part filtering).  Manual UI tests
-            # on 172852 showed the legacy view path produces 23 false-damaged parts vs
-            # the face path's 12 true-positives, because the legacy path triggers
-            # `_check_side_consistency` on pillar_a_right etc. whose observations come
-            # from views the part is not the "primary" view of, even when those
-            # observations are legitimate cross-view damage calls.  The face path
-            # bypasses that by feeding ViewAgent a locked candidate part set, so the
-            # model only emits damage for parts it should be able to assess.
-            use_face_path = request.GET.get("face_path", "true").lower() not in ("false", "0", "no")
-            return StreamingHttpResponse(
-                _orchestrator_workflow_sync(
-                    files, vehicle_info, plan=explicit_plan, use_face_path=use_face_path
-                ),
-                content_type="text/event-stream",
-            )
+    if not files:
         return StreamingHttpResponse(
-            _assess_workflow_sync(files, vehicle_info, plan=explicit_plan),
+            _error_stream("任务不存在"),
             content_type="text/event-stream",
         )
-    finally:
-        override.__exit__(None, None, None)
+
+    # Optional manual view override: ?views=photo1:front_left,photo2:front_right
+    view_override = _parse_view_override(request.GET.get("views", ""))
+    explicit_plan = None
+    if view_override:
+        explicit_plan = _build_plan_from_view_override(files, view_override)
+
+    # Feature flag: use new orchestrator by default; allow fallback to legacy pipeline.
+    use_orchestrator = request.GET.get("legacy", "").lower() not in ("true", "1", "yes")
+    if use_orchestrator:
+        # Feature flag: default the orchestrator onto the new face path (face_profiler
+        # + deterministic camera_side + candidate-part filtering).  Manual UI tests
+        # on 172852 showed the legacy view path produces 23 false-damaged parts vs
+        # the face path's 12 true-positives, because the legacy path triggers
+        # `_check_side_consistency` on pillar_a_right etc. whose observations come
+        # from views the part is not the "primary" view of, even when those
+        # observations are legitimate cross-view damage calls.  The face path
+        # bypasses that by feeding ViewAgent a locked candidate part set, so the
+        # model only emits damage for parts it should be able to assess.
+        use_face_path = request.GET.get("face_path", "true").lower() not in ("false", "0", "no")
+        return StreamingHttpResponse(
+            _orchestrator_workflow_sync(
+                files, vehicle_info, plan=explicit_plan,
+                use_face_path=use_face_path, llm_override=override,
+            ),
+            content_type="text/event-stream",
+        )
+    return StreamingHttpResponse(
+        _assess_workflow_sync(files, vehicle_info, plan=explicit_plan, llm_override=override),
+        content_type="text/event-stream",
+    )
 
 
 def _sse_event(event_type: str, data: Dict[str, Any]) -> str:
@@ -391,6 +462,7 @@ def _orchestrator_workflow_sync(
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
     use_face_path: bool = True,
+    llm_override: "_LLMOverride | None" = None,
 ) -> Generator[str, None, None]:
     """Synchronous wrapper around the new orchestrator async workflow.
 
@@ -403,6 +475,12 @@ def _orchestrator_workflow_sync(
     修复(2026-07-04):之前的实现 `yield from async_to_sync(...)` 把所有事件
     收集到 list 才一次性 yield,导致浏览器看到进度条"卡住"。现在用
     bridge_thread + asyncio.run 让每个 SSE 事件立刻到达浏览器。
+
+    ``llm_override`` is entered INSIDE the worker thread (see ``_bridge``)
+    so the swapped config.MINIMAX_* / LLM_PROVIDER values are the ones the
+    agent layer actually reads when it makes LLM calls.  Entering it in the
+    request thread would be useless — that thread returns the lazy
+    StreamingHttpResponse before the worker thread starts.
     """
     import asyncio
     import threading
@@ -411,6 +489,8 @@ def _orchestrator_workflow_sync(
     q: "Queue[str | None]" = Queue()
 
     async def _bridge() -> None:
+        if llm_override is not None:
+            llm_override.__enter__()
         try:
             async for event in _run_orchestrator_workflow(
                 files, vehicle_info, plan=plan, use_face_path=use_face_path
@@ -419,6 +499,8 @@ def _orchestrator_workflow_sync(
         except Exception as exc:  # propagate async errors as SSE error event
             q.put(_sse_event("error", {"message": str(exc)}))
         finally:
+            if llm_override is not None:
+                llm_override.__exit__(None, None, None)
             q.put(None)  # sentinel: done
 
     def _run_bridge() -> None:
@@ -581,21 +663,37 @@ def _assess_workflow_sync(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Optional[Dict[str, Any]] = None,
+    llm_override: "_LLMOverride | None" = None,
 ) -> Generator[str, None, None]:
     """Synchronous wrapper around the async agent workflow."""
-    yield from async_to_sync(_collect_assess_events)(files, vehicle_info, plan=plan)
+    yield from async_to_sync(_collect_assess_events)(
+        files, vehicle_info, plan=plan, llm_override=llm_override
+    )
 
 
 async def _collect_assess_events(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Optional[Dict[str, Any]] = None,
+    llm_override: "_LLMOverride | None" = None,
 ) -> List[str]:
-    """Consume the async generator and return a list of SSE event strings."""
-    events = []
-    async for event in _run_assess_workflow(files, vehicle_info, plan=plan):
-        events.append(event)
-    return events
+    """Consume the async generator and return a list of SSE event strings.
+
+    The LLM override is entered here — inside the async workflow — rather
+    than in the request thread, so the swapped config values are the ones
+    the agents read.  (async_to_sync runs this on its own thread; the
+    request thread has already returned the StreamingHttpResponse.)
+    """
+    if llm_override is not None:
+        llm_override.__enter__()
+    try:
+        events = []
+        async for event in _run_assess_workflow(files, vehicle_info, plan=plan):
+            events.append(event)
+        return events
+    finally:
+        if llm_override is not None:
+            llm_override.__exit__(None, None, None)
 
 
 async def _run_assess_workflow(

@@ -73,12 +73,14 @@ async def call_minimax(
     """
     provider = (os.environ.get("LLM_PROVIDER") or PROVIDER_MINIMAX).strip().lower()
     if provider in (PROVIDER_OPENAI, PROVIDER_ANTHROPIC):
-        # Build an LLMConfig from the current request's overrides.  The
-        # config module's MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_MODEL
-        # are swapped by api.views._ApiKeyOverride when the UI sends
-        # ?api_key=... / ?base_url=... / ?model=... — so this picks them
-        # up automatically.
-        cfg = LLMConfig(
+        # Resolve the endpoint through the single normalization entry point.
+        # The UI forwards SDK-style base URLs (e.g. MiniMax's documented
+        # ``https://api.minimaxi.com/v1`` for OpenAI-compat); ``from_overrides``
+        # appends the terminal ``/chat/completions`` or ``/messages`` path so
+        # the verbatim POST lands on a real endpoint instead of 404ing.  It
+        # also picks up the config.MINIMAX_* values swapped in by
+        # api.views._LLMOverride for this request.
+        cfg = LLMConfig.from_overrides(
             provider=provider,
             api_key=config.MINIMAX_API_KEY,
             base_url=config.MINIMAX_BASE_URL,
