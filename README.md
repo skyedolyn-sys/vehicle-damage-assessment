@@ -6,32 +6,54 @@
 
 - **后端**: Django 4.2 + Django REST framework + django-cors-headers
 - **Agent 工作流**: master_assessment_agent = face_profiler → face_mapping → view_agent (face path, 默认) → synthesizer → topology_comparator;legacy view_agent 仍可通过 `?face_path=false` 切换
-- **LLM**: MiniMax-M3 多模态模型
-- **数据库**: SQLite（默认，生产可切 PostgreSQL）
+- **LLM**: MiniMax-M3 多模态模型 (可切到 OpenAI 兼容或 Anthropic 兼容,见下文"切换 LLM Provider")
+- **数据库**: SQLite(默认,生产可切 PostgreSQL)
 
 ## 项目结构
 
 ```
-vehicle_damage_assessment/
-├── core/                       # Django 配置
+vehicle-damage-assessment/                ← Django 项目根 = 仓库根
+├── README.md
+├── LICENSE
+├── .gitignore
+├── manage.py                             # Django 入口
+├── config.py                             # 业务配置 + dotenv 加载
+├── requirements.txt
+├── pytest.ini
+├── core/                                 # Django 配置
 │   ├── settings.py
 │   ├── urls.py
 │   ├── asgi.py
 │   └── wsgi.py
-├── manage.py                   # Django 入口
-├── api/                        # API 应用
-│   ├── models.py               # UploadedTask, UploadedPhoto, VehicleSpec
-│   ├── views.py                # /api/upload, /api/assess/<task_id>
-│   └── management/commands/    # seed_vehicle_specs 等命令
-├── agents/                     # 子代理（框架无关）
-├── models/                     # dataclass 模型
-├── data/                       # 缓存与数据文件（vehicle_specs_cache.json 由 app 写入，已 gitignore）
-├── scripts/                    # 独立脚本
-├── tests/                      # pytest 测试
-└── uploads/                    # 上传照片存储目录（MEDIA_ROOT）
+├── api/                                  # API 应用
+│   ├── models.py                         # UploadedTask, UploadedPhoto, VehicleSpec
+│   ├── views.py                          # /api/upload, /api/assess/<task_id>
+│   └── management/commands/              # seed_vehicle_specs 等命令
+├── agents/                               # 子代理(框架无关)
+│   ├── master_agent.py                   # 主编排
+│   ├── face_profiler.py / face_mapping.py
+│   ├── view_agent.py / view_mapping.py
+│   ├── llm_client.py                     # provider 切换层
+│   ├── synthesizer.py / topology_comparator.py / output_validator.py
+│   ├── rules/                            # YAML 配置 + Jinja 模板
+│   └── _log_init.py                      # 集中化日志 handler
+├── models/                               # dataclass 模型
+├── data/                                 # 缓存与数据文件(vehicle_specs_cache.json 由 app 写入,已 gitignore)
+├── scripts/                              # 独立脚本
+├── tests/                                # pytest 测试
+├── uploads/                              # 上传照片存储目录(MEDIA_ROOT,gitignore)
+├── docs/                                 # 设计文档
+├── stability_reports/                    # 离线 E2E 评估产物(JSON 已 gitignore,只保留脚本与总结)
+└── templates/
+    └── index.html                        # 前端调试页面(单文件)
 ```
 
 ## 快速启动
+
+```bash
+git clone https://github.com/skyedolyn-sys/vehicle-damage-assessment.git
+cd vehicle-damage-assessment
+```
 
 ### 1. 安装依赖
 
@@ -209,7 +231,7 @@ API Key:     sk-ant-...
 
 ## 交付验收清单
 
-收到仓库后，建议按下面顺序完成 bootstrap：
+收到仓库后，建议按下面顺序完成 bootstrap(命令都在 `vehicle_damage_assessment/` 子目录里跑)：
 
 1. `cp .env.example .env` 并填入真实 `MINIMAX_API_KEY` 与 `DJANGO_SECRET_KEY`
 2. `pip install -r requirements.txt`

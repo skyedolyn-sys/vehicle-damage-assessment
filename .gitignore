@@ -9,14 +9,53 @@
 # UI regression screenshots
 ui-*.png
 
-# Python (extra safety at root)
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
 
-# Local sqlite databases
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads and results (test artifacts)
+uploads/
+team_parallel_results/
+
+# Logs and debug
+*.log
+debug_*.json
+run_*.py
+
+# Database
 db.sqlite3
 *.sqlite3
 
-# Logs
-*.log
+# Local secrets — the receiving environment must fill this in.  A template
+# is checked in at .env.example with placeholder values only.
+.env
+.env.local
+
+# Runtime cache written by data/vehicle_specs_cache.py — see the .example
+# next to it for the seed-load step that recreates it on first run.
+data/vehicle_specs_cache.json
+
+# Backup files (e.g. vehicle_specs_cache.json.bak.YYYYMMDD_HHMMSS)
+*.bak
+*.bak.*
+data/*.json.bak.*
+
+# pytest cache
+.pytest_cache/
