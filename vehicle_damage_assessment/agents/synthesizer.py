@@ -1,6 +1,6 @@
-import json
+import logging
 from typing import List, Dict, Any, Optional, Set
-from config import PARTS_CATALOG, PARTS_BY_ID, PARTS_TOPOLOGY
+from config import PARTS_BY_ID, PARTS_TOPOLOGY
 from models.part_state import PartActualState
 from models.topology import VehicleTopology
 
@@ -11,6 +11,8 @@ from agents.rules import (
 )
 from agents.view_mapping import canonicalize_view_id
 from agents._policy_logger import log_policy_conflict  # §4.3
+
+logger = logging.getLogger(__name__)
 
 
 _PRIORITIES = load_priority_map()
@@ -78,13 +80,60 @@ def _has_photo_coverage_for_part(part_id: str, region_results: List[Dict[str, An
     return False
 
 
+def _is_backfilled_uncertain(candidate: Dict[str, Any]) -> bool:
+    """True when the candidate is a placeholder filled in by the view checklist
+    (the model never actually observed the part), not a real uncertain verdict.
+
+    Backfilled rows either carry ``_backfill=True`` (the explicit skip tag
+    introduced when ``view_agent._backfill_from_candidates`` switched to
+    status ``absent``) **or** carry ``status=="uncertain"`` with a
+    ``model_confidence_score == 0.0`` and the fixed "按视角清单补齐" description
+    (the legacy view-checklist backfill).  Both kinds carry no information
+    and must NOT count as evidence for or against damage — they are simply
+    "no information".
+    """
+    # New sentinel: view_agent writes status="absent" with _backfill=True.
+    if candidate.get("_backfill"):
+        return True
+    if candidate.get("status") not in ("uncertain", "absent"):
+        return False
+    if float(candidate.get("model_confidence_score", 1.0)) == 0.0:
+        return True
+    return "按视角清单补齐" in (candidate.get("description") or candidate.get("notes") or "")
+
+
 def _resolve_status(candidates: List[Dict[str, Any]]) -> str:
-    """Conservatively resolve status across evidence sources."""
+    """Resolve status across evidence sources with confidence weighting and
+    multi-view consensus protection.
+
+    A lone damaged observation must NOT override a multi-view intact/uncertain
+    consensus.  Confidence is folded in: a damaged vote only carries full
+    weight at high confidence; medium/low-confidence damaged votes need
+    corroboration before they can out-vote consensus.
+    """
     statuses = [c.get("status", "uncertain") for c in candidates]
     if any(s == "missing" for s in statuses):
         return "missing"
-    if any(s == "damaged" for s in statuses):
+
+    damaged = [c for c in candidates if c.get("status") == "damaged"]
+    intact = [c for c in candidates if c.get("status") == "intact"]
+    # Real (observed) uncertain votes exclude checklist backfills, which carry
+    # no information either way.
+    real_uncertain = [
+        c for c in candidates
+        if c.get("status") == "uncertain" and not _is_backfilled_uncertain(c)
+    ]
+    # Consensus = independent observations that agree the part is NOT damaged.
+    not_damaged_consensus = len(intact) + len(real_uncertain)
+
+    if damaged:
+        high_conf_damage = any(c.get("confidence") == "high" for c in damaged)
+        # A single, sub-high-confidence damaged vote against a >=2-view
+        # not-damaged consensus is an outlier → stay uncertain, don't flip.
+        if len(damaged) == 1 and not high_conf_damage and not_damaged_consensus >= 2:
+            return "uncertain"
         return "damaged"
+
     return max(statuses, key=lambda s: UNCERTAIN_STATUS_PRIORITY.get(s, 0))
 
 
@@ -189,6 +238,18 @@ def _resolve_status_roof(candidates: List[Dict[str, Any]]) -> str:
     views.  Only mark damaged when at least two non-rear primary views agree,
     or when every visible source reports damage.  Otherwise prefer intact.
     """
+    if not candidates:
+        return "uncertain"
+
+    # Drop checklist backfill placeholders before any voting: they carry no
+    # information (the model never observed the part) and would otherwise flood
+    # the roof resolver with fake uncertain votes that drown out the real
+    # damaged observations.  This mirrors the filtering _resolve_status already
+    # applies via _is_backfilled_uncertain.  The face path admits roof/rear-side
+    # parts into many photos' candidate sets, so without this filter nearly
+    # every photo contributes a backfill uncertain that flips a real damaged
+    # verdict to uncertain/intact.
+    candidates = [c for c in candidates if not _is_backfilled_uncertain(c)]
     if not candidates:
         return "uncertain"
 
@@ -437,13 +498,83 @@ def _severe_neighbors(
     ]
 
 
+def _count_intact_consensus(part: Dict[str, Any]) -> int:
+    """Count distinct evidence sources that report this part as intact.
+
+    A "multi-view intact consensus" (>=2 sources) is strong evidence the part
+    is genuinely undamaged and should not be overridden by adjacency inference.
+    """
+    sources = part.get("evidence_sources", []) or []
+    return sum(1 for src in sources if src.get("status") == "intact")
+
+
+def _credible_severe_neighbors(
+    neighbor_status: Dict[str, str],
+    neighbor_level: Dict[str, str],
+    neighbor_confidence: Dict[str, str],
+    allowed: Set[str],
+    neighbor_evidence_counts: Dict[str, int] | None = None,
+) -> List[str]:
+    """Like ``_severe_neighbors`` but only trust neighbours whose severe verdict
+    is itself credible.
+
+    Credibility requires cross-validation:
+      * high-confidence severe — accepted outright; OR
+      * medium-confidence severe corroborated by >=2 evidence sources (more
+        than one independent view saw it); OR
+      * two or more medium-confidence single-view severes reinforcing each other.
+
+    A single low-confidence OR a lone medium-confidence single-view severe is
+    NOT credible — that is exactly how one phantom severe cascades into its
+    neighbours (172852: a single-view ``fender_rear_right`` severe made Rule 7
+    flip the genuinely-intact ``taillight_rear_right``).
+    """
+    neighbor_evidence_counts = neighbor_evidence_counts or {}
+    severe = [
+        pid for pid, status in neighbor_status.items()
+        if status in ("damaged", "missing")
+        and pid in allowed
+        and neighbor_level.get(pid) == "severe"
+    ]
+    credible: List[str] = []
+    medium_single: List[str] = []
+    for pid in severe:
+        conf = neighbor_confidence.get(pid)
+        if conf == "high":
+            credible.append(pid)
+        elif conf == "medium":
+            if neighbor_evidence_counts.get(pid, 1) >= 2:
+                credible.append(pid)
+            else:
+                medium_single.append(pid)
+        # low-confidence severe is never credible on its own
+    # Two or more mutually-reinforcing medium single-view severes are credible.
+    if len(medium_single) >= 2:
+        credible.extend(medium_single)
+    # Preserve original neighbour ordering / dedupe.
+    seen: Set[str] = set()
+    return [pid for pid in severe if pid in credible and not (pid in seen or seen.add(pid))]
+
+
 # Precomputed frozensets for rear-core inference by side.
 REAR_CORE_PARTS = load_part_profile("rear_core")
 REAR_CORE_STRUCTURAL_PARTS = load_part_profile("rear_core_structural")
 
 
 def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Build traceable evidence sources for each part conclusion."""
+    """Build traceable evidence sources for each part conclusion.
+
+    Each source carries an ``observed`` flag so downstream topology rules can
+    distinguish a REAL observation from a checklist backfill.  A backfilled
+    row (the model never saw the part) is marked by
+    ``model_confidence_score == 0.0`` — the exact backfill signature
+    (master_agent's consensus downgrade floors at 0.4 and never reaches 0.0,
+    so 0.0 is unambiguous).  Without this flag the backfill signal was dropped
+    here and the topology rules treated "evidence_sources non-empty" as
+    "was observed", cascade-promoting never-seen pillars (172852 pillar_b_right
+    systematic FP).  ``observed`` defaults True for legacy candidates that lack
+    the score entirely.
+    """
     sources: List[Dict[str, Any]] = []
     seen: set = set()
     for c in candidates:
@@ -460,6 +591,8 @@ def _build_evidence_sources(candidates: List[Dict[str, Any]]) -> List[Dict[str, 
             "confidence": c.get("confidence", "low"),
             "evidence_photo": photos,
             "notes": c.get("notes", "").strip(),
+            # False only for checklist backfills (model never observed the part).
+            "observed": float(c.get("model_confidence_score", 1.0)) != 0.0,
         })
     return sources
 
@@ -492,6 +625,17 @@ def _apply_adjacency_rules(
         }
         neighbor_level: Dict[str, str] = {
             adj.part_id: merged_by_id.get(adj.part_id, {}).get("damage_level", "")
+            for adj in adjacents
+        }
+        neighbor_confidence: Dict[str, str] = {
+            adj.part_id: merged_by_id.get(adj.part_id, {}).get("confidence", "")
+            for adj in adjacents
+        }
+        # How many independent evidence sources back each neighbour's verdict;
+        # used by _credible_severe_neighbors to cross-validate medium-confidence
+        # single-view severe claims.
+        neighbor_evidence_counts: Dict[str, int] = {
+            adj.part_id: len(merged_by_id.get(adj.part_id, {}).get("evidence_sources", []) or [])
             for adj in adjacents
         }
 
@@ -604,14 +748,24 @@ def _apply_adjacency_rules(
         # dislodged.  Single diagonal/rear-corner views often miss the true state
         # of the lamp housing because it is hidden behind torn metal, debris, or
         # extreme deformation.
+        #
+        # 172852 FP fix: do NOT override a multi-view intact consensus, and only
+        # trust credible (non-low-confidence) severe neighbours.  Previously a
+        # phantom ``fender_rear_right`` severe (itself a single-view false
+        # positive) made this rule flip the genuinely-intact
+        # ``taillight_rear_right`` — two false positives corroborating each other.
         if (
             part_id.startswith("taillight_rear_")
             and new_part.get("status") == "intact"
         ):
             side = part_id.split("_")[-1]
             allowed = REAR_CORE_STRUCTURAL_PARTS | {f"fender_rear_{side}"}
-            severe_rear_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
-            if severe_rear_neighbors:
+            severe_rear_neighbors = _credible_severe_neighbors(
+                neighbor_status, neighbor_level, neighbor_confidence, allowed,
+                neighbor_evidence_counts,
+            )
+            intact_consensus = _count_intact_consensus(new_part)
+            if severe_rear_neighbors and intact_consensus < 2:
                 new_part = _set_damaged_severe(
                     new_part,
                     "missing",
@@ -632,7 +786,12 @@ def _apply_adjacency_rules(
             allowed = REAR_CORE_PARTS | {f"taillight_rear_{side}", f"fender_rear_{side}"}
             # Exclude the part itself (a fender shouldn't validate itself).
             allowed = allowed - {part_id}
-            severe_rear_neighbors = _severe_neighbors(neighbor_status, neighbor_level, allowed)
+            # Only trust credible severe neighbours (see Rule 7 172852 FP fix):
+            # a phantom single-view severe must not cascade into this part.
+            severe_rear_neighbors = _credible_severe_neighbors(
+                neighbor_status, neighbor_level, neighbor_confidence, allowed,
+                neighbor_evidence_counts,
+            )
             if not severe_rear_neighbors:
                 updated.append(new_part)
                 continue
@@ -804,16 +963,58 @@ def synthesizer_agent(
     # (Rules 4-8) because they need evidence_source metadata.
 
     # Apply photo-gated adjacency consistency rules.
+    pre_adjacency_status = {p["part_id"]: p.get("status") for p in merged_parts}
     final_parts = _apply_adjacency_rules(merged_parts, topology)
+    adjacency_flips = [
+        (pid, pre_adjacency_status.get(pid), post.get("status"))
+        for pid, post in ((p["part_id"], p) for p in final_parts)
+        if pre_adjacency_status.get(pid) != post.get("status")
+    ]
 
     # Mirrors often appear at the edge of corner photos; if no view reports
     # damage and at least one view describes the visible shell as intact, fall
     # back to intact rather than leaving the mirror uncertain.
+    pre_mirror_status = {p["part_id"]: p.get("status") for p in final_parts}
     final_parts = _apply_mirror_fallback(final_parts, parts_by_id)
+    mirror_flips = [
+        (pid, pre_mirror_status.get(pid), p.get("status"))
+        for pid, p in ((p["part_id"], p) for p in final_parts)
+        if pre_mirror_status.get(pid) != p.get("status")
+    ]
 
     # Severe rear collisions may label crushed parts as "missing"; prefer
     # "damaged severe" when any source reports actual damage.
+    pre_rear_status = {p["part_id"]: p.get("status") for p in final_parts}
     final_parts = _apply_rear_missing_to_damaged_fallback(final_parts, parts_by_id)
+    rear_flips = [
+        (pid, pre_rear_status.get(pid), p.get("status"))
+        for pid, p in ((p["part_id"], p) for p in final_parts)
+        if pre_rear_status.get(pid) != p.get("status")
+    ]
+
+    # Final tally (so the silent synthesizer becomes auditable from master.log).
+    final_status_count: Dict[str, int] = {}
+    for p in final_parts:
+        s = p.get("status", "uncertain")
+        final_status_count[s] = final_status_count.get(s, 0) + 1
+    summary = (
+        f"synthesizer: {len(final_parts)} parts"
+        f" (damaged={final_status_count.get('damaged', 0)},"
+        f" intact={final_status_count.get('intact', 0)},"
+        f" uncertain={final_status_count.get('uncertain', 0)},"
+        f" missing={final_status_count.get('missing', 0)})"
+        f" | adjacency_flips={len(adjacency_flips)}"
+        f" mirror_flips={len(mirror_flips)}"
+        f" rear_flips={len(rear_flips)}"
+    )
+    logger.info("[synthesizer] %s", summary)
+    if adjacency_flips:
+        logger.info(
+            "[synthesizer] adjacency flips: %s",
+            ", ".join(f"{pid}:{pre}->{post}" for pid, pre, post in adjacency_flips[:5]),
+        )
+        if len(adjacency_flips) > 5:
+            logger.info("[synthesizer]   ... %d more", len(adjacency_flips) - 5)
 
     part_actual_states = [PartActualState.from_legacy_dict(p) for p in final_parts]
 
@@ -821,6 +1022,10 @@ def synthesizer_agent(
         "parts": final_parts,
         "part_actual_states": part_actual_states,
         "uncertain_items": all_uncertain_items,
+        "summary": summary,
+        "adjacency_flips": adjacency_flips,
+        "mirror_flips": mirror_flips,
+        "rear_flips": rear_flips,
     }
 
 

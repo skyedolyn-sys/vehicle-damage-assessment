@@ -1,486 +1,340 @@
-"""Planner agent — 4-class photo pre-screening.
+"""Planner agent — 视觉驱动的照片三类分拣。
 
-The planner no longer assigns canonical views.  Its only job is to classify
-every uploaded photo into one of five categories:
+The planner no longer assigns canonical views, and it no longer classifies by
+filename keyword or aspect ratio.  Its only job is to look at every uploaded
+photo with the vision model and sort it into one of three buckets:
 
-- ``exterior``   — vehicle exterior photos that should go to the ViewAgent Team
-- ``interior``   — cabin / dashboard / seat photos
+- ``exterior``     — vehicle exterior photos that go to the ViewAgent Team.
+                     Gated: the model must be able to name a rough position
+                     (front/rear/left/right/roof) AND make out part of the
+                     vehicle outline.  A pure close-up with no discernible
+                     outline does NOT qualify and is stripped from the stream.
+- ``interior``     — cabin photos (airbag / dashboard / seat / headliner).
+                     Stripped from the exterior evidence chain so their damage
+                     is not mis-attributed to exterior structural parts
+                     (172852: an airbag/dashboard shot fed the pillar_a_left
+                     false positive).
 - ``vehicle_info`` — license, VIN plate, nameplate, policy, invoice, etc.
-- ``exclude``    — photos that are irrelevant or unusable for assessment
-- ``scene_intake`` — scene/context photos that need dedicated handling later
 
-Classification is deterministic: filename keywords are checked first, and
-image aspect ratio is used only as a tie-breaker for exterior vs close-up.
-No LLM call is made by the planner in the new architecture.
+There is NO deterministic fallback.  If the vision call fails or a photo
+cannot be confidently classified, the photo is marked ``exclude`` and dropped
+from the downstream damage-assessment stream rather than guessed into the
+exterior pool.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
+from agents.minimax_client import build_image_content, call_minimax, extract_json
+from agents.rules import render_prompt_template
 from agents.view_mapping import PHOTO_TYPE_CATEGORIES
 from config import IMAGE_MAX_WIDTH
 
 logger = logging.getLogger(__name__)
-_planner_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_planner.log"), mode="a", encoding="utf-8"
-)
-_planner_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_planner_file_handler.setLevel(logging.INFO)
-logger.addHandler(_planner_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "planner.log")
 logger.setLevel(logging.INFO)
 
 
-#: Filename keywords that strongly indicate a vehicle_info photo.
-_VEHICLE_INFO_KEYWORDS = (
-    "行驶证", "证件", "vin", "铭牌", "license", "plate", "车牌", "牌照",
-    "车架号", "登记证书", "保单", "发票", "合格证", "一致性证书",
-)
+#: Vision-emitted categories (before the exterior gate is applied).
+_VISION_CATEGORIES = {"exterior", "interior", "vehicle_info"}
+_ALLOWED_POSITION = {"front", "rear", "left", "right", "roof", "unclear"}
+_ALLOWED_CONFIDENCE = {"high", "medium", "low"}
 
-#: Filename keywords that strongly indicate an interior photo.
-_INTERIOR_KEYWORDS = (
-    "车内", "内饰", "驾驶舱", "座椅", "方向盘", "仪表盘", "中控", "后排",
-    "安全带", "气囊", "仪表台",
-)
+#: Photos per LLM call.  Small batches keep M3 from spending the whole token
+#: budget on one long <think> block (finish=length truncation → no JSON).
+#: Mirrors the face_profiler batch size, tuned against the same failure mode.
+_BATCH_SIZE = 4
 
-#: Filename keywords that strongly indicate an exterior photo.
-_EXTERIOR_KEYWORDS = (
-    "车头", "车前", "前部", "正面", "前脸",
-    "车尾", "车后", "后部", "背面", "后备箱",
-    "左前", "前左", "右前", "前右",
-    "左后", "后左", "右后", "后右",
-    "左侧", "左侧面", "右侧", "右侧面",
-    "顶部", "俯视", "车顶", "天窗",
-)
-
-#: Filename keywords that strongly indicate a scene/context photo.
-_SCENE_INTAKE_KEYWORDS = (
-    "现场", "全景", "环境", "事故", "碰撞点", "路牌", "路面", "第三方",
-    "整体", "全貌", "场景",
-)
-
-#: Keywords that indicate the photo should be excluded.
-_EXCLUDE_KEYWORDS = (
-    "无关", "错误", "重复", "模糊", "黑屏", "空白", "截图",
-)
+_CONFIDENCE_SCORE = {"high": 0.95, "medium": 0.7, "low": 0.4}
 
 
-def _decode_image_dimensions(photo: Dict[str, Any]) -> Tuple[int, int]:
-    """Decode image width/height for deterministic signals."""
-    path = photo.get("path", "") or photo.get("url", "")
-    if not path or path.startswith(("http://", "https://")):
-        return 0, 0
-    try:
-        from PIL import Image
-        with Image.open(path) as img:
-            return img.size
-    except Exception:
-        return 0, 0
+def _build_prior_block(vehicle_prior: Dict[str, Any]) -> str:
+    """Build the vehicle-prior context block injected into the system prompt."""
+    vehicle_name = vehicle_prior.get("vehicle", "该车")
+    topology = vehicle_prior.get("topology")
+    anchors = vehicle_prior.get("key_anchors")
+
+    block = f"车型：{vehicle_name}\n"
+    if topology:
+        block += f"车型拓扑：\n{json.dumps(topology, ensure_ascii=False, indent=2)}\n"
+    if anchors:
+        block += f"关键锚点：\n{json.dumps(anchors, ensure_ascii=False, indent=2)}\n"
+    return block
 
 
-def _classify_by_filename(filename: str) -> str:
-    """Return a deterministic category based on filename keywords."""
-    if not filename:
-        return ""
-    lowered = filename.lower()
+def _normalize_result(raw: Any) -> List[Dict[str, Any]] | None:
+    """Normalize model output into a list of per-photo dicts.
 
-    if any(kw in lowered for kw in _EXCLUDE_KEYWORDS):
-        return "exclude"
-    if any(kw in lowered for kw in _VEHICLE_INFO_KEYWORDS):
-        return "vehicle_info"
-    if any(kw in lowered for kw in _INTERIOR_KEYWORDS):
-        return "interior"
-    if any(kw in lowered for kw in _SCENE_INTAKE_KEYWORDS):
-        return "scene_intake"
-    if any(kw in lowered for kw in _EXTERIOR_KEYWORDS):
-        return "exterior"
-    return ""
-
-
-def _classify_by_signals(photo: Dict[str, Any]) -> str:
-    """Deterministic classification using filename + image aspect ratio."""
-    filename = photo.get("id", "") or photo.get("name", "")
-    by_name = _classify_by_filename(filename)
-    if by_name:
-        return by_name
-
-    width = photo.get("_decoded_width", 0)
-    height = photo.get("_decoded_height", 0)
-    if width and height:
-        ratio = width / height
-        # Extreme aspect ratios are often close-up damage shots; treat them as
-        # exterior so ViewAgent can still inspect them.
-        if ratio < 0.6 or ratio > 1.6:
-            return "exterior"
-
-    return "exterior"
-
-
-def _category_confidence(category: str) -> Tuple[float, str]:
-    """Return (score, level) for a deterministic classification."""
-    if category in ("vehicle_info", "interior"):
-        return 0.95, "high"
-    if category == "exclude":
-        return 0.90, "high"
-    if category == "scene_intake":
-        return 0.80, "medium"
-    return 0.70, "medium"
-
-
-def _category_reason(category: str) -> str:
-    reasons = {
-        "exterior": "车身外观照片",
-        "interior": "车内/内饰照片",
-        "vehicle_info": "车辆证件/铭牌/保单类照片",
-        "exclude": "与损伤评估无关或无法使用的照片",
-        "scene_intake": "现场/环境/全景照片，需 scene_intake 专属处理",
-    }
-    return reasons.get(category, "未匹配到明确关键词，默认按外观处理")
-
-
-async def _classify_photo_types(
-    photos: List[Dict[str, Any]],
-    vehicle_prior: Dict[str, Any],
-) -> Dict[str, str]:
-    """Classify each photo into a 4-class category.
-
-    Primary path: call the LLM with a small image-bearing prompt
-    (planner_classification_prompt.j2) so the model actually looks at
-    the photo.  Filenames like ``172852-01.png`` carry no semantic signal
-    so a filename-only heuristic would mis-classify every photo as
-    ``exterior`` (the default fallback).
-
-    Fallback path: if the LLM call fails (network, parse, empty) we
-    fall back to the deterministic filename + aspect-ratio classifier so
-    the pipeline never deadlocks.
+    Accepts a bare list, a dict wrapping a ``results``/``classifications``
+    list, or a single dict.  Returns None when the shape is unusable.
     """
-    if not photos:
-        return {}
-
-    type_map: Dict[str, str] = await _classify_with_llm(photos)
-    if type_map:
-        return type_map
-
-    logger.warning(
-        "[planner] LLM classification returned empty/errored; "
-        "falling back to filename + aspect-ratio heuristic"
-    )
-    return _classify_deterministic(photos)
-
-
-def _classify_deterministic(photos: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Pure-Python fallback that needs no LLM call.
-
-    Useful as a safety net when the LLM call errors out so the
-    pipeline can still return a complete plan.  Filenames like
-    ``172852-01.png`` carry no semantic signal so this will usually
-    return ``exterior`` for everything — exactly the problem the LLM
-    path solves.  Keep this as a fallback only.
-    """
-    type_map: Dict[str, str] = {}
-    for photo in photos:
-        if "_decoded_width" not in photo:
-            w, h = _decode_image_dimensions(photo)
-            photo["_decoded_width"] = w
-            photo["_decoded_height"] = h
-
-    for photo in photos:
-        photo_id = photo.get("id", "")
-        if not photo_id:
-            continue
-        category = _classify_by_signals(photo)
-        type_map[photo_id] = category
-        logger.info("[planner] photo %s classified as %s (fallback)", photo_id, category)
-
-    return type_map
-
-
-async def _classify_with_llm(photos: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Classify each photo into a 4-class category via the vision model.
-
-    Primary path: per-photo ``understand_image`` call (MCP tool when
-    configured, chat-completions image path otherwise).  Calling the
-    model once per photo avoids the long <think> blocks that broke the
-    earlier batched approach — the model has more thinking headroom
-    for a single image and the JSON it returns is small.
-
-    Returns
-    -------
-    dict[photo_id, category]
-        Empty dict if every call errors or returns an unexpected
-        shape; callers should fall back to the deterministic
-        classifier in that case.
-    """
-    from agents.mcp_client import understand_image
-    from agents.rules import render_prompt_template
-
-    if not photos:
-        return {}
-
-    type_map: Dict[str, str] = {}
-
-    for photo in photos:
-        path = photo.get("path") or photo.get("url")
-        photo_id = photo.get("id")
-        if not path or not photo_id:
-            continue
-
-        prompt = _build_classify_prompt(photo_id)
-        try:
-            raw_text = await understand_image(path, prompt)
-        except Exception as exc:
-            logger.warning("[planner] understand_image failed for %s: %s", photo_id, exc)
-            continue
-
-        raw = _parse_classify_response(raw_text)
-        category = raw.get("category") if isinstance(raw, dict) else None
-        category = _normalize_category(category) if category else None
-        if category:
-            type_map[photo_id] = category
-            logger.info("[planner] photo %s classified as %s (vision)", photo_id, category)
+    result = raw
+    if isinstance(result, dict):
+        for key in ("results", "classifications"):
+            if key in result:
+                result = result[key]
+                break
         else:
-            logger.warning(
-                "[planner] photo %s vision response unparseable: %s",
-                photo_id, raw_text[:200],
+            result = [result]
+    if not isinstance(result, list):
+        return None
+    return [item for item in result if isinstance(item, dict)]
+
+
+def _sanitize_item(item: Dict[str, Any], photo_id: str) -> Dict[str, Any]:
+    """Coerce a single model item into the vision-classification contract."""
+    category = item.get("category")
+    if category not in _VISION_CATEGORIES:
+        # Unknown/garbage category → strip from the stream downstream.
+        category = "exclude"
+
+    position = item.get("position")
+    if position not in _ALLOWED_POSITION:
+        position = "unclear"
+
+    confidence = item.get("confidence")
+    if confidence not in _ALLOWED_CONFIDENCE:
+        confidence = "low"
+
+    return {
+        "photo_id": item.get("photo_id", photo_id),
+        "category": category,
+        "position": position,
+        "has_vehicle_outline": bool(item.get("has_vehicle_outline", False)),
+        "cabin_evidence": str(item.get("cabin_evidence", "无")),
+        "confidence": confidence,
+        "reason": str(item.get("reason", "")),
+    }
+
+
+def _realign_to_input(
+    items: List[Dict[str, Any]], photos: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Align model output to input order, falling back per missing photo."""
+    by_id = {item.get("photo_id"): item for item in items if item.get("photo_id")}
+    aligned: List[Dict[str, Any]] = []
+    for index, photo in enumerate(photos):
+        photo_id = photo["id"]
+        item = by_id.get(photo_id)
+        if item is None and index < len(items):
+            # Model may have dropped/renamed ids; fall back to positional match.
+            item = items[index]
+        if item is None:
+            # No usable output for this photo → exclude (no deterministic guess).
+            aligned.append(
+                {
+                    "photo_id": photo_id,
+                    "category": "exclude",
+                    "position": "unclear",
+                    "has_vehicle_outline": False,
+                    "cabin_evidence": "无",
+                    "confidence": "low",
+                    "reason": "模型未返回该照片的结果，剥离出数据流",
+                }
             )
+            continue
+        sanitized = _sanitize_item(item, photo_id)
+        # The photo_id is the authoritative key — always pin it to the input id,
+        # never trust a model-renamed id from a positional fallback.
+        sanitized["photo_id"] = photo_id
+        aligned.append(sanitized)
+    return aligned
 
-    if not type_map:
-        logger.warning(
-            "[planner] LLM classify returned empty type_map (all calls errored)"
-        )
 
-    return type_map
+def _apply_exterior_gate(vision_item: Dict[str, Any]) -> str:
+    """Map a vision-classification item to a downstream PHOTO_TYPE category.
 
-
-def _build_classify_prompt(photo_id: str) -> str:
-    """Build the per-photo classification prompt.
-
-    Kept short on purpose: ``understand_image`` is a single-turn
-    tool call so the model should not have to spend tokens on
-    multi-photo bookkeeping.
+    The exterior bucket is gated: a photo only counts as exterior when the
+    model can name a rough position AND make out the vehicle outline.  Anything
+    short of that — an interior shot, a document, a position-less close-up, or
+    an unparseable result — is stripped from the exterior evidence stream.
     """
-    return (
-        "判断这张车辆照片属于以下哪一类（仅输出一个 JSON 对象，不要 markdown、"
-        "不要 thinking）：\n"
-        "- exterior: 车身外部照片（车头/车尾/侧/45度角/车顶）\n"
-        "- interior: 车内照片（座椅/方向盘/仪表台/中控/后排）\n"
-        "- vehicle_info: 证件、行驶证、VIN 码、铭牌、车牌特写\n"
-        "- unknown: 其它或判断不了\n\n"
-        "输出格式："
-        '{"photo_id": "<photo_id>", "category": "<类别>", "reason": "<≤10 字理由>"}\n\n'
-        f"photo_id = {photo_id}"
+    category = vision_item.get("category")
+    if category == "interior":
+        return "interior"
+    if category == "vehicle_info":
+        return "vehicle_info"
+    if category == "exterior":
+        has_outline = vision_item.get("has_vehicle_outline", False)
+        position = vision_item.get("position", "unclear")
+        if has_outline and position != "unclear":
+            return "exterior"
+        # Exterior-looking but fails the outline/position gate → strip.
+        return "exclude"
+    # Unknown / garbage category → strip.
+    return "exclude"
+
+
+async def _classify_batch(
+    photos: List[Dict[str, Any]], vehicle_prior: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Classify one small batch of photos (single LLM call)."""
+    system_prompt = render_prompt_template(
+        "planner_vision_classify", prior_block=_build_prior_block(vehicle_prior)
     )
 
-
-def _parse_classify_response(raw_text: str) -> Dict[str, Any]:
-    """Parse the vision response into a dict, tolerating extra prose.
-
-    The model occasionally wraps its answer with a sentence of
-    explanation.  We look for the first JSON object in the text and
-    return it; an empty dict is returned if no JSON is found.
-    """
-    import json
-    import re
-
-    if not raw_text:
-        return {}
-
-    # Try a direct parse first.
-    try:
-        parsed = json.loads(raw_text)
-        if isinstance(parsed, dict):
-            return parsed
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Look for the first balanced JSON object in the text.
-    match = re.search(r"\{[^{}]*\}", raw_text)
-    if not match:
-        return {}
-    try:
-        parsed = json.loads(match.group(0))
-        return parsed if isinstance(parsed, dict) else {}
-    except json.JSONDecodeError:
-        return {}
-
-
-async def _classify_with_chat(photos: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Batched chat-completions path kept for the test suite and as
-    an explicit fallback.  The production path is now
-    :func:`_classify_with_llm` which uses one ``understand_image`` call
-    per photo.
-    """
-
-
-async def _classify_one_batch(
-    batch: List[Dict[str, Any]],
-    batch_idx: int,
-    total_batches: int,
-) -> Dict[str, str]:
-    """Classify a single batch of photos (≤ BATCH_SIZE)."""
-    from agents.minimax_client import build_image_content, call_minimax, extract_json
-    from agents.rules import render_prompt_template
-    from config import IMAGE_MAX_WIDTH, MINIMAX_MODEL
-
-    system_prompt = render_prompt_template("planner_classification_prompt")
-
-    user_blocks: List[Dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                f"批次 {batch_idx + 1}/{total_batches}，请按顺序逐张判断下述照片的类别。"
-                "只输出一个 JSON 对象，no thinking, no markdown。"
-            ),
-        }
+    content: List[Dict[str, Any]] = [
+        {"type": "text", "text": system_prompt},
+        {"type": "text", "text": "以下是待分类的照片，请逐张判定："},
     ]
-    for photo in batch:
-        path = photo.get("path") or photo.get("url")
-        if not path:
-            continue
-        user_blocks.append(build_image_content(path, max_width=IMAGE_MAX_WIDTH))
-        user_blocks.append(
-            {"type": "text", "text": f"  ↑ photo_id: {photo.get('id', 'unknown')}"}
-        )
+    for photo in photos:
+        content.append({"type": "text", "text": f"照片编号: {photo['id']}"})
+        content.append(build_image_content(photo["path"], max_width=IMAGE_MAX_WIDTH))
 
-    messages = [
-        {
-            "role": "user",
-            "content": user_blocks,
-        }
-    ]
+    messages = [{"role": "user", "content": content}]
 
-    try:
-        raw_text = await call_minimax(
-            messages=messages,
-            temperature=0.0,
-            # 4 photos per batch: thinking ~3K chars + JSON ~200 chars.
-            # 6000 leaves enough headroom.
-            max_tokens=6000,
-            model=MINIMAX_MODEL,
-            response_format={"type": "json_object"},
-        )
-    except Exception as exc:
-        logger.error("[planner] LLM classify batch %d failed: %s", batch_idx, exc)
-        return {}
+    logger.info("[planner] vision classify start batch_size=%d", len(photos))
+    raw = await call_minimax(
+        messages,
+        temperature=0.1,
+        max_tokens=2000 * len(photos),
+        response_format={"type": "json_object"},
+        reasoning_effort="low",
+    )
 
-    raw = extract_json(raw_text)
-    if not isinstance(raw, dict):
-        logger.warning(
-            "[planner] batch %d returned non-dict: type=%s raw_len=%s",
-            batch_idx, type(raw).__name__,
-            len(raw_text) if raw_text else 0,
-        )
-        return {}
+    parsed = extract_json(raw)
+    if parsed is None:
+        logger.warning("[planner] unparseable vision output; excluding batch")
+        return _realign_to_input([], photos)
 
-    return _parse_llm_classifications(raw)
+    items = _normalize_result(parsed)
+    if items is None:
+        logger.warning("[planner] vision output not a list; excluding batch")
+        return _realign_to_input([], photos)
+
+    return _realign_to_input(items, photos)
 
 
-def _parse_llm_classifications(raw: Dict[str, Any]) -> Dict[str, str]:
-    """Tolerate two common LLM payload shapes:
-
-    1) ``{"classifications": [{"photo_id": ..., "photo_type": ...}, ...]}``
-    2) ``{"<photo_id>": "exterior", ...}``  (flat map)
-    """
-    type_map: Dict[str, str] = {}
-    items = raw.get("classifications")
-    if isinstance(items, list):
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            pid = item.get("photo_id")
-            cat = item.get("photo_type") or item.get("category")
-            if pid and cat:
-                normalized = _normalize_category(cat)
-                if normalized:
-                    type_map[pid] = normalized
-    else:
-        for pid, cat in raw.items():
-            if isinstance(cat, str) and cat in PHOTO_TYPE_CATEGORIES:
-                type_map[pid] = cat
-
-    if not type_map:
-        logger.warning(
-            "[planner] LLM classify raw had no usable entries: keys=%s",
-            list(raw.keys())[:5],
-        )
+async def _classify_by_vision(
+    photos: List[Dict[str, Any]], vehicle_prior: Dict[str, Any]
+) -> Dict[str, Dict[str, Any]]:
+    """Classify every photo with the vision model, batched to avoid truncation."""
+    type_map: Dict[str, Dict[str, Any]] = {}
+    for start in range(0, len(photos), _BATCH_SIZE):
+        batch = photos[start : start + _BATCH_SIZE]
+        for item in await _classify_batch(batch, vehicle_prior):
+            type_map[item["photo_id"]] = item
     return type_map
-
-
-def _normalize_category(raw_cat: str) -> str:
-    """Map the LLM's free-form category string onto PHOTO_TYPE_CATEGORIES.
-
-    The prompt asks for ``exterior / interior / auxiliary / unknown``
-    but our canonical enum uses ``vehicle_info`` instead of ``auxiliary``
-    and ``scene_intake`` for some scene photos.  This normalizer is
-    conservative: it only forwards strings that fit the canonical enum.
-    """
-    if not raw_cat:
-        return ""
-    cat = raw_cat.lower().strip()
-    aliases = {
-        "auxiliary": "vehicle_info",
-        "vin": "vehicle_info",
-        "document": "vehicle_info",
-        "license": "vehicle_info",
-        "plate": "vehicle_info",
-        "scene": "scene_intake",
-        "scene_intake": "scene_intake",
-        "interior": "interior",
-        "exterior": "exterior",
-        "exclude": "exclude",
-        "unknown": "unknown",
-        "vehicle_info": "vehicle_info",
-    }
-    return aliases.get(cat, "")
 
 
 async def planner_agent(
     photos: List[Dict[str, Any]],
     vehicle_prior: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Classify every photo into one of the five downstream categories.
+    """Classify every photo via the vision model into a downstream category.
 
     Parameters
     ----------
     photos:
         List of photo dicts with at least ``id`` and ``path`` (or ``url``).
     vehicle_prior:
-        Output from ``vehicle_prior_agent``; currently unused by the planner
-        but kept for interface compatibility.
+        Output from ``vehicle_prior_agent``; supplies topology/anchors context.
 
     Returns
     -------
     dict
         ``{"photo_classifications": [...]}`` where each item contains
-        ``photo_id``, ``category``, ``confidence_score``, ``confidence``,
-        and ``reason``.
+        ``photo_id``, ``category``, ``confidence_score``, ``confidence``, and
+        ``reason``.  ``category`` is one of ``PHOTO_TYPE_CATEGORIES``; photos
+        that fail the exterior gate or cannot be classified are ``exclude``.
     """
     if not photos:
         return {"photo_classifications": []}
 
-    categories = await _classify_photo_types(photos, vehicle_prior)
+    vision_map = await _classify_by_vision(photos, vehicle_prior)
 
     photo_classifications: List[Dict[str, Any]] = []
     for photo in photos:
         photo_id = photo.get("id", "")
-        category = categories.get(photo_id, "exterior")
-        score, level = _category_confidence(category)
-        photo_classifications.append({
-            "photo_id": photo_id,
-            "category": category,
-            "confidence_score": score,
-            "confidence": level,
-            "reason": _category_reason(category),
-        })
+        vision_item = vision_map.get(photo_id, {})
+        category = _apply_exterior_gate(vision_item)
+        confidence = vision_item.get("confidence", "low")
+        score = _CONFIDENCE_SCORE.get(confidence, 0.4)
+
+        reason = vision_item.get("reason", "")
+        position = vision_item.get("position", "unclear")
+        cabin = vision_item.get("cabin_evidence", "无")
+        gate_note = ""
+        if vision_item.get("category") == "exterior" and category == "exclude":
+            gate_note = "（外观门槛未过：无轮廓或位置不明，剥离）"
+        full_reason = f"{reason} | position={position} cabin={cabin}{gate_note}".strip(" |")
+
+        photo_classifications.append(
+            {
+                "photo_id": photo_id,
+                "category": category,
+                "confidence_score": score,
+                "confidence": confidence,
+                "reason": full_reason,
+            }
+        )
+        logger.info("[planner] photo %s → %s (%s)", photo_id, category, confidence)
 
     logger.info(
-        "[planner] classified %d photos: %s",
+        "[planner] vision classified %d photos: %s",
         len(photo_classifications),
         {c: sum(1 for p in photo_classifications if p["category"] == c) for c in PHOTO_TYPE_CATEGORIES},
     )
 
+    return {"photo_classifications": photo_classifications}
+
+
+def get_coverage_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """Summarize photo classification coverage for the SSE `locations` event.
+
+    Why this exists: the orchestrator SSE handler (``api/views.py``) sends a
+    ``locations`` event that the debug console renders before streaming
+    per-view subagent results.  The legacy planner emitted a
+    ``view_groups`` map keyed by ``STANDARD_VIEWS``; the new planner only
+    produces 4-class ``photo_classifications`` (exterior / interior /
+    document / other).  We synthesize a coverage summary from the new
+    classification output so the frontend keeps working.
+
+    Shape contract (consumed by ``api/views._run_orchestrator_workflow``):
+        ``covered_view_count``  : int, number of exterior photos classified
+        ``exterior_view_count`` : int, the standard exterior view count
+        ``photo_count``         : int, total photos in plan
+        ``categories``          : dict[str, int], count by category
+    """
+    classifications = plan.get("photo_classifications", []) or []
+    counts: Dict[str, int] = {}
+    for entry in classifications:
+        cat = entry.get("category", "unknown")
+        counts[cat] = counts.get(cat, 0) + 1
+
+    # Lazy import to avoid circular dependency on view_mapping.
+    from agents.view_mapping import EXTERIOR_VIEWS
+
     return {
-        "photo_classifications": photo_classifications,
+        "covered_view_count": counts.get("exterior", 0),
+        "exterior_view_count": len(EXTERIOR_VIEWS),
+        "photo_count": len(classifications),
+        "categories": counts,
     }
+
+
+def plan_to_location_map(plan: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Project planner output into a ``photo_id → location`` map for SSE.
+
+    Each location dict carries the classification fields so the debug console
+    can render a per-photo row before subagent results arrive.
+    """
+    locations: Dict[str, Dict[str, Any]] = {}
+    for entry in plan.get("photo_classifications", []) or []:
+        photo_id = entry.get("photo_id", "")
+        if not photo_id:
+            continue
+        locations[photo_id] = {
+            "photo_id": photo_id,
+            "category": entry.get("category", "unknown"),
+            "confidence": entry.get("confidence", "low"),
+            "confidence_score": entry.get("confidence_score", 0.0),
+            "reason": entry.get("reason", ""),
+        }
+    return locations

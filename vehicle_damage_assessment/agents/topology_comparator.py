@@ -5,6 +5,7 @@ Produces a DamageAssessment with structural damage pattern detection.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import replace
 from typing import Any, Dict, List, Set
@@ -16,6 +17,8 @@ from config import PARTS_BY_ID
 from models.assessment import DamageAssessment, StructuralDamagePattern
 from models.part_state import DamageLevel, PartActualState, Status
 from models.topology import VehicleTopology
+
+logger = logging.getLogger(__name__)
 
 
 # Damage level weights for primary_damage_zone calculation.
@@ -143,6 +146,32 @@ def _has_intact_origin_marker(part: PartActualState) -> bool:
     if any(marker in (part.notes or "") for marker in _INTACT_ORIGIN_MARKERS):
         return True
     return False
+
+
+def _has_real_observation(part: PartActualState) -> bool:
+    """Return True if the part has at least one evidence source that is a REAL
+    observation, not a checklist backfill.
+
+    Rules 9/10/11 propagate structural damage only to parts that were actually
+    observed — their docstrings say "at least one evidence source (i.e. were
+    actually observed/assessed)".  But a checklist backfill (the model never
+    saw the part) also produces an evidence-source row, so ``evidence_sources``
+    non-empty is NOT a valid proxy for "was observed".  The backfill signal
+    used to be dropped at ``synthesizer._build_evidence_sources``; it now rides
+    through as the ``observed`` flag, and this helper is the single source of
+    truth for reading it.
+
+    A backfilled row (observed=False) means the model never saw the part, so it
+    must not satisfy the "has evidence" precondition — otherwise an unobserved
+    pillar gets cascade-promoted from a damaged neighbour (172852 pillar_b_right
+    systematic FP, promoted from pillar_a_right severe).  ``observed`` defaults
+    True for legacy entries that predate the marker.
+    """
+    sources = part.evidence_sources or []
+    return any(
+        isinstance(src, dict) and src.get("observed", True)
+        for src in sources
+    )
 
 
 def _has_source_status(part: PartActualState, status: str, regions: Set[str]) -> bool:
@@ -425,7 +454,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id.startswith("pillar_")
             and new_part.status in (Status.UNCERTAIN, Status.MISSING)
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: a part that the vision layer marked intact but then
             # downgraded to uncertain (positive-anchor / edge-visible rule) is
@@ -474,7 +503,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id == "roof_front"
             and new_part.status in (Status.INTACT, Status.UNCERTAIN)
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: do not flip an originally-intact part (downgraded
             # to uncertain by §2.1/§2.2) to damaged via front-corner inference.
@@ -510,7 +539,7 @@ class TopologyConsistencyEnforcer:
         if (
             part.part_id in ("roof_middle", "roof_rear")
             and new_part.status == Status.UNCERTAIN
-            and new_part.evidence_sources
+            and _has_real_observation(new_part)
         ):
             # P1-B FP fix: do not flip an originally-intact part (downgraded
             # to uncertain by §2.1/§2.2) to damaged via neighbour inference.
@@ -613,6 +642,15 @@ class TopologyComparator:
 
         # 6. structural_damage_flag: True if any severe pattern exists.
         structural_flag = any(p.severity == "severe" for p in patterns)
+
+        logger.info(
+            "[topology] %d parts (damaged=%d intact=%d uncertain=%d missing=%d) "
+            "| patterns=%d %s | structural_flag=%s | primary_zone=%s",
+            len(parts), len(damaged_parts), len(intact_parts),
+            len(uncertain_parts), len(missing_parts),
+            len(patterns), [p.pattern_id for p in patterns],
+            structural_flag, primary_zone,
+        )
 
         return DamageAssessment(
             vehicle_info={

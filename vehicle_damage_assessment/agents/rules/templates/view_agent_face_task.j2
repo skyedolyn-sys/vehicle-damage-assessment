@@ -1,0 +1,79 @@
+请分析这张车辆外观照片，识别可见部件的损伤状态。
+
+## 本照片的相机朝向已由前置分析确定（你不需要、也不允许重新判断朝向或左右）
+
+- 相机看到的车身大方向（facing）：[[ facing ]]
+- 相机看到的车身侧（camera_side）：[[ camera_side ]]
+- 定位锚点：[[ anchor ]]
+
+{% if camera_side %}
+**左右已锁定**：这张照片看到的侧面是车辆的【[[ camera_side ]]】侧。所有带 `_left` / `_right` 后缀的部件，其左右归属已由 camera_side 决定，你**不得**翻转、不得改判。屏幕左/右不等于车辆左/右，这一点已由前置分析处理完毕，你无需再做镜面翻转推理。
+{% else %}
+本照片未确定单一车身侧（正对车头/车尾、侧面占满、车顶或局部特写）。请只评估下方候选部件清单里的部件，不要臆测左右。
+{% endif %}
+
+## 只允许评估以下候选部件（这是本照片能可靠归面的部件范围）
+
+`part_id` 必须**逐字**使用下表左列的规范 id，不得自造、不得简写（例如必须写 `windshield_front` 而不是 `windshield`，必须写 `roof_front` 而不是 `roof`）：
+
+{% for part_id, part_name in candidate_parts_named -%}
+- `{{ part_id }}` = {{ part_name }}
+{% endfor %}
+
+**严禁**评估清单之外的任何部件，**严禁**使用上表以外的 part_id。即使你在画面里"觉得"看到了别的部件，也不要输出——那些部件要么不在本照片可归属的面上，要么属于另一侧，强行判定会造成左右归属错误。
+
+## 损伤判定要求
+
+- `status`: intact / damaged / missing / uncertain
+- `damage_level`: none / light / moderate / severe / unknown
+- `damage_types`: scratch / dent / deformation / crack / breakage / paint_loss / corrosion（可多选，none 也算）
+- `confidence`: high / medium / low
+- 每个 damaged 部件的 `description` 必须含**具体位置**（如"右A柱顶部""右后门中部"），但**不要**写 camera_position / 镜面翻转推导——朝向与左右已由前置确定。
+- 部件权重（coverage）：{% for pid, cov in candidate_parts.items() %}{{ pid }}={{ cov }}{% if not loop.last %}, {% endif %}{% endfor %}
+  - dominant/partial 面的部件：正常判定损伤。
+  - glimpse 面的部件：该面只露一角，**不得单独据此定 severe**；若仅 glimpse 面证据，最高判 moderate 且 confidence 不高于 medium。
+
+【反光/高光/缝隙防误判 — 严格遵守】
+- 金属/玻璃表面的高光、倒影、环境反射、车身分缝、门缝、焊接线 **不是**损伤。判 damaged 前必须确认：损伤形态（凹陷/裂纹/破碎/缺失）**独立于**光影变化存在。
+- 立柱（pillar_*）尤其谨慎：立柱表面光滑反光极强，**只有明确的变形/弯折/断裂**才判 damaged；反光造成的明暗不均一律判 intact。
+- 邻接严重受损 ≠ 本部件受损：即使相邻部件（翼子板/保险杠/柱）严重损毁，只要本部件表面无独立损伤形态，就判 intact。不得把碰撞区的损伤"挂"到完好的相邻部件上。
+
+【损伤归件纪律 — 损伤必须落在"自己的面"上】
+- 归件前先回答："变形/断裂发生在哪个部件**自己的表面**上？"只把损伤归给自身表面出现损伤形态的部件，不要归给"损伤区域附近"的部件。
+- A柱是挡风玻璃与前侧窗之间那根**倾斜承力梁**。挡风玻璃边框、车顶前缘、翼子板上沿的弯折/撕裂 **不是** A柱损伤——除非那根倾斜梁体本身可见弯折/断裂/错位。车顶塌陷、门框/窗框变形同理，都不等于立柱损伤。
+- 左右存疑时不猜：若能看到损伤但无法确定它属于左侧还是右侧的立柱，把损伤报在确定可见的面件上（如 `windshield_front` / `roof_front`），**严禁**凭猜测挂到某个带 `_left`/`_right` 后缀的立柱上。挂错侧比漏报更严重。
+
+【车顶三段 + 天窗细分 — 必须逐段评估】
+- 车顶在候选清单里被分成三段独立部件：`roof_front`（前挡上缘到天窗前）/ `roof_middle`（天窗覆盖区）/ `roof_rear`（天窗后到后挡上缘）。
+- 当天窗玻璃（`sunroof_glass`）在候选清单里时，它**独立于** `roof_middle` 评估——一个是玻璃，一个是该段的钣金/骨架。
+- 看到车顶时，**必须**为每一个在候选清单里的车顶段+天窗**单独给出判定**，不能只报一段就停。
+  - 只要该段在画面里**有任何部分可见**（哪怕被防护布/反光遮挡一部分），就必须给出 `intact` / `damaged` / `uncertain` 之一的判定。
+  - 完全不可见才允许跳过。
+- 车顶塌陷/天窗碎裂是连带损伤：天窗玻璃破碎时，**几乎必然**伴随 `roof_middle` 的钣金变形（玻璃所在的那段），评估 `roof_middle` 时要把"天窗区域骨架/钣金是否变形"作为核心信号。
+- 严禁用整体的 `roof` 作为 part_id——这是非法 id，会被丢弃。必须根据**损伤发生在车顶的哪一段**选择 `roof_front` / `roof_middle` / `roof_rear` 之一。
+  - 拿不准是哪一段：塌顶主体在前挡正上方 → `roof_front`；在天窗正上方/天窗区骨架 → `roof_middle`；在后挡正上方 → `roof_rear`；分散在多段 → 报最严重的两段。
+
+【立柱防误判负例 — 参照执行】
+- 负例1：A柱附近挡风玻璃边框严重弯折、车顶前缘塌陷，但 A柱梁体本身顺着边框走向、无独立折弯 → `pillar_a_*` 判 intact，损伤归 `windshield_front` / `roof_front`。
+- 负例2：相邻车门/翼子板严重凹陷，立柱表面只有条状高光倒影、梁体笔直 → 立柱判 intact（高光不是损伤，邻接损伤不传递）。
+
+【已见损伤不要反悔 — 与上条互锁】
+- 若你在某视角已观察到明确的破碎/断裂/缺失（如"灯壳破碎""结构外露"），**不要**因为另一视角反光较亮、或邻接部件也受损，就把该部件改判 intact/uncertain。
+- 严禁写"相邻部件严重受损，降低本部件置信度"这类自我降权——邻接损伤只用于**佐证**本部件受损，绝不用于**否定**本部件已见的损伤。
+- 大灯/尾灯/后视镜是易碎件：碰撞车这类部件**大概率**有损伤，看到裂纹/破碎即判 damaged，不要因"灯罩亮"而犹豫。
+
+## 本次任务
+- photo_id: [[ photo_id ]]
+- 车型信息：[[ vehicle_name ]]
+
+## 输出格式（只输出一个合法 JSON 对象）
+
+```json
+{
+  "parts": [
+    {"part_id": "pillar_a_right", "status": "damaged", "damage_level": "severe", "damage_types": ["deformation"], "confidence": "high", "model_confidence_score": 0.85, "description": "右A柱顶部严重变形"}
+  ]
+}
+```
+
+只输出 JSON，不要额外文字。只评估候选清单内的部件。

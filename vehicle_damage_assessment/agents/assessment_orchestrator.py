@@ -34,12 +34,9 @@ _CONFIDENCE_PRIORITY: Dict[str, int] = _PRIORITIES["confidence"]
 
 
 logger = logging.getLogger(__name__)
-_orchestrator_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_orchestrator.log"), mode="a", encoding="utf-8"
-)
-_orchestrator_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_orchestrator_file_handler.setLevel(logging.INFO)
-logger.addHandler(_orchestrator_file_handler)
+# Centralized file logging — see agents/_log_init.py.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "orchestrator.log")
 logger.setLevel(logging.INFO)
 
 
@@ -47,10 +44,18 @@ async def assessment_orchestrator(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = True,
 ) -> Dict[str, Any]:
-    """Run the full assessment workflow and return the legacy result dict."""
+    """Run the full assessment workflow and return the legacy result dict.
+
+    Defaults to ``use_face_path=True`` because the face path (face_profiler +
+    deterministic camera_side + candidate-part filtering) is the production
+    pipeline verified on the 172852 sample (12 true-damaged, 0 false-positive
+    flips).  The legacy view path is kept for ablation and explicit
+    ``use_face_path=False`` overrides only.
+    """
     final_event = None
-    async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan):
+    async for event in assessment_orchestrator_stream(files, vehicle_info, plan=plan, use_face_path=use_face_path):
         if event.get("type") == "final":
             final_event = event
     if final_event is None:
@@ -62,13 +67,14 @@ async def assessment_orchestrator_stream(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream assessment workflow events.
 
     Currently yields only a ``final`` event.  Fine-grained progress events
     can be added once MasterAgent supports streaming.
     """
-    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan):
+    async for event in _assessment_orchestrator_impl(files, vehicle_info, plan=plan, use_face_path=use_face_path):
         yield event
 
 
@@ -76,11 +82,12 @@ async def _assessment_orchestrator_impl(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Dict[str, Any] | None = None,
+    use_face_path: bool = True,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Delegate to MasterAgent and adapt its output to the legacy shape."""
     from agents.view_mapping import NON_EXTERIOR_VIEWS
 
-    assessment = await master_assessment_agent(files, vehicle_info, plan=plan)
+    assessment = await master_assessment_agent(files, vehicle_info, plan=plan, use_face_path=use_face_path)
     assessment_result = assessment.to_legacy_result()
     plan = getattr(assessment, "_plan", plan) or {}
 

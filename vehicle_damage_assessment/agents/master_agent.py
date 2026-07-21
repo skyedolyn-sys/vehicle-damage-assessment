@@ -17,9 +17,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from agents.minimax_client import build_image_content
+from agents.face_mapping import align_profile_ids, build_face_prior
+from agents.face_profiler import face_profiler_agent
 from agents.planner_agent import planner_agent
 from agents.reviewer_subagent import reviewer_subagent
 from agents.synthesizer import synthesizer_agent
@@ -35,25 +36,63 @@ from agents.view_mapping import (
 )
 from config import MAX_CONCURRENT_API_CALLS
 from models import DamageAssessment, PartActualState
-from models.part_state import Status, DamageLevel
 
 logger = logging.getLogger(__name__)
 
-_master_file_handler = logging.FileHandler(
-    os.path.expanduser("~/vehicle_damage_assessment_master.log"), mode="a", encoding="utf-8"
-)
-_master_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-_master_file_handler.setLevel(logging.INFO)
-logger.addHandler(_master_file_handler)
+# Centralized file logging — see agents/_log_init.py for the dedup + reload
+# story.  Replaces a per-import FileHandler that crashed on read-only $HOME
+# and accumulated duplicates under Django runserver autoreload.
+from agents._log_init import attach_file_handler
+attach_file_handler(logger, "master.log")
 logger.setLevel(logging.INFO)
+
+# C3/C4/D3 silent-node logging (commit d91cb3a).  These subagents emit
+# logger.info summaries from inside their own modules; without an explicit
+# FileHandler on their loggers, the messages propagate up but never reach
+# the disk because no root logger has a handler attached.  Each silent
+# module gets its own log file under logs/ so an operator can grep one
+# module without wading through the others.
+#
+# The root logger is WARNING-level (Django default), which would suppress
+# INFO summaries even with a handler attached; explicitly set each
+# silent-module logger to INFO so the summaries are emitted.
+for _silent_module in (
+    "agents.synthesizer",
+    "agents.topology_comparator",
+    "agents.reviewer_subagent",
+):
+    sl = logging.getLogger(_silent_module)
+    attach_file_handler(sl, f"{_silent_module.split('.')[-1]}.log")
+    sl.setLevel(logging.INFO)
 
 
 async def master_assessment_agent(
     files: List[Dict[str, Any]],
     vehicle_info: Dict[str, str],
     plan: Optional[Dict[str, Any]] = None,
+    use_face_path: bool = True,
 ) -> DamageAssessment:
     """Run the full assessment pipeline using the ViewAgent Team architecture.
+
+    Parameters
+    ----------
+    use_face_path:
+        When ``False`` the legacy path is preserved unchanged: each
+        ViewAgent self-derives its camera view and applies the Step B flip.
+        When ``True`` (default — matches the production pipeline verified on
+        the 172852 sample, 12 true-damaged vs the legacy path's 23
+        false-positive flips) the new face path is used: a ``face_profiler``
+        first determines each photo's facing + visible-face coverage,
+        deterministic ``face_mapping`` flips that into a locked
+        ``camera_side`` and a candidate part set, and ViewAgent then only
+        assesses damage inside that set (no self-facing, no flip).  This
+        removes the left/right mirror-flip failure mode at the root.
+
+        Default flipped from ``False`` to ``True`` so direct callers
+        (notebooks, ad-hoc scripts) get the production behaviour without
+        having to remember the flag.  Pre-existing stability scripts that
+        explicitly compared the two paths must pass
+        ``use_face_path=False`` themselves.
 
     Parameters
     ----------
@@ -89,19 +128,88 @@ async def master_assessment_agent(
     ]
     logger.info("[master] exterior photos=%d total=%d", len(exterior_photos), len(files))
 
+    # 3b. (face path only) Profile each exterior photo's facing + face coverage,
+    # then deterministically derive a locked camera_side + candidate part set.
+    face_priors: Dict[str, Dict[str, Any]] = {}
+    if use_face_path and exterior_photos:
+        profiles = await face_profiler_agent(exterior_photos, vehicle_prior)
+        # Pair each profile with its authoritative input photo id.  The model
+        # sometimes echoes the id back without the extension (172852-07.png →
+        # 172852-07); keying face_priors on that mangled id makes the later
+        # ``face_priors.get(photo["id"])`` miss, silently dropping the photo to
+        # the unconstrained legacy path (172852 pillar_a_left FP).
+        for pid, prof in align_profile_ids(profiles, exterior_photos):
+            if pid:
+                face_priors[pid] = build_face_prior(pid, prof)
+        logger.info(
+            "[master] face path: profiled %d photos, %d with a locked camera_side, %d usable",
+            len(face_priors),
+            sum(1 for fp in face_priors.values() if fp.get("camera_side")),
+            sum(1 for fp in face_priors.values() if fp.get("usable")),
+        )
+
     # 4. Dispatch ViewAgent Team in parallel
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
 
     async def _run_one(photo: Dict[str, Any]) -> Dict[str, Any]:
         async with semaphore:
             try:
-                return await view_agent(photo, vehicle_prior)
+                prior = face_priors.get(photo.get("id")) if use_face_path else None
+                return await view_agent(photo, vehicle_prior, face_prior=prior)
             except Exception as exc:
                 logger.warning("[master] view_agent failed for photo_id=%s: %s", photo.get("id"), exc)
                 return {"photo_id": photo.get("id"), "primary_view": None, "view_detections": [], "parts": []}
 
     view_results = await asyncio.gather(*[_run_one(p) for p in exterior_photos])
-    view_results = [r for r in view_results if r.get("parts")]
+    # Keep a result when it has kept parts OR unmapped parts — the latter carry
+    # the model's out-of-catalog / out-of-scope observations, which downstream
+    # diagnostics (and the facing consensus) must not silently lose.
+    view_results = [
+        r for r in view_results if r.get("parts") or r.get("unmapped_parts")
+    ]
+
+    # 4b. (face path only) Cross-photo facing consensus.  A low-confidence
+    # facing may simply be wrong (a front-windshield close-up misread as
+    # rear).  When high-confidence photos establish a dominant facing/side,
+    # low-confidence photos defer to it: we re-interpret the suspect photo
+    # under the consensus frame and keep only the damage observations whose
+    # location is self-consistent with the consensus damaged region.
+    if use_face_path and face_priors:
+        _apply_facing_consensus(face_priors, view_results)
+
+    # Persist each exterior photo's resolved primary view into the plan so the
+    # per-photo camera_position is auditable downstream (screen/vehicle-side
+    # mismatches are a known error source; without this the only record is the
+    # view log).  ``plan["photo_views"]`` maps photo_id -> primary_view.  On the
+    # face path the primary view comes from the deterministic facing (already
+    # flip-free), so this record is also the cross-photo camera_side consensus
+    # input.
+    plan["photo_views"] = [
+        {"photo_id": r.get("photo_id"), "view_id": r.get("primary_view")}
+        for r in view_results
+        if r.get("photo_id")
+    ]
+    if use_face_path:
+        plan["photo_faces"] = [
+            {
+                "photo_id": pid,
+                "facing": fp.get("facing"),
+                "camera_side": fp.get("camera_side"),
+                "assignable_faces": fp.get("assignable_faces"),
+            }
+            for pid, fp in face_priors.items()
+        ]
+
+    # Persist the per-photo unmapped parts so out-of-catalog / out-of-scope
+    # observations are auditable downstream instead of vanishing at the
+    # normalization boundary.
+    unmapped = [
+        {"photo_id": r.get("photo_id"), "unmapped_parts": r.get("unmapped_parts")}
+        for r in view_results
+        if r.get("unmapped_parts")
+    ]
+    if unmapped:
+        plan["unmapped_parts"] = unmapped
 
     # 5. Aggregate into PartEvidence, run side-consistency check, then
     # build region_results.  The side check downgrades mismatched
@@ -116,6 +224,24 @@ async def master_assessment_agent(
             "screen/vehicle-side mismatch",
             side_violations,
         )
+
+    # 5b. Resolve left/right conflicts using cross-photo consensus.
+    #
+    # Three-layer defense:
+    #   1. Bilateral damage detection: if ≥2 part pairs show damage on BOTH
+    #      sides (e.g. door_front_left + door_front_right both damaged), the
+    #      vehicle likely sustained bilateral impact — respect the raw
+    #      observations, skip mutual exclusion entirely.
+    #   2. Unilateral mutual exclusion: when only ONE side of a part pair is
+    #      damaged, keep the higher-confidence observation and downgrade the
+    #      other to uncertain (view_agent may hallucinate mirrored damage when
+    #      given dual-side candidates on a pure-side photo).
+    #   3. Camera-side consensus: photos whose locked camera_side contradicts
+    #      the majority consensus are penalized — only high-confidence
+    #      damage_level observations (severe/moderate) survive; light damage
+    #      is downgraded to uncertain.
+    _resolve_left_right_conflicts(part_evidence, face_priors)
+
     region_results = _build_region_results(view_results, part_evidence)
 
     # 6. Reviewer
@@ -134,157 +260,29 @@ async def master_assessment_agent(
     assessment = compare_topology(topology, actual_states)
     assessment._plan = plan  # type: ignore[attr-defined]
 
-    # 9.5. Sunroof roof-metal propagation (post-topology).
-    # Topology rules (Rule 10/11) just promoted roof_front/middle/rear to
-    # damaged severe from pillar / windshield / structural evidence.  When
-    # the sample has no top-view photo, sunroof_glass remains UNCERTAIN.
-    # The sunroof sits inside the now-damaged roof panels, so promote it
-    # to damaged severe too.  Runs after compare_topology so it sees the
-    # propagated roof_metal state.
-    #
-    # Toggleable via SKIP_SUNROOF_PROPAGATION=1 (for A/B comparison tests
-    # — production runs should always have it enabled).
-    if os.getenv("SKIP_SUNROOF_PROPAGATION") != "1":
-        _apply_sunroof_roof_propagation(assessment)
+    # 10. Carry the synthesizer's "needs human review" items through to the
+    # legacy result so the UI's "不确定项 / 需人工复核" panel is populated.
+    # The orchestrator path was previously dropping these because the legacy
+    # view_agent path was the only one consuming them.  Reviewer additions
+    # are merged on top, deduped by part_id.
+    synth_uncertain = list(merged.get("uncertain_items", []) or [])
+    review_added = list(review.get("added_uncertain_items", []) or [])
+    if review_added:
+        seen_ids = {item.get("part_id") for item in synth_uncertain}
+        for item in review_added:
+            if item.get("part_id") not in seen_ids:
+                synth_uncertain.append(item)
+                seen_ids.add(item.get("part_id"))
+    assessment.uncertain_items = synth_uncertain
 
     logger.info(
-        "[master] done findings=%d damaged=%d uncertain=%d",
+        "[master] done findings=%d damaged=%d uncertain=%d review_items=%d",
         len(assessment.parts),
         len(assessment.damaged_parts),
         len(assessment.uncertain_parts),
+        len(assessment.uncertain_items),
     )
     return assessment
-
-
-def _apply_sunroof_roof_propagation(assessment: DamageAssessment) -> None:
-    """Promote sunroof_glass when ≥1 adjacent roof metal part is DAMAGED.
-
-    Two cases the upstream pipeline gets wrong:
-
-    (a) UNCERTAIN — when no top-view photo exists, the per-part synthesizer
-        leaves sunroof_glass as UNCERTAIN.  But the sunroof sits inside the
-        now-damaged roof panels, so it is very likely damaged too.  Promote
-        to damaged severe.
-
-    (b) MISSING — when the model sees a top-view but observes the sunroof is
-        *gone* (broken-out glass, fragmented).  The synthesizer may pick
-        ``missing`` as the terminal status.  For downstream reporting it is
-        more useful to keep the conclusion as ``damaged severe`` because the
-        vehicle had a sunroof and the sunroof is now destroyed.  Same
-        rationale as :func:`agents.synthesizer._apply_rear_missing_to_damaged_fallback`.
-
-    Conservative gate: requires ≥1 of {roof_front, roof_middle, roof_rear}
-    to be DAMAGED (not merely UNCERTAIN or INTACT).  No effect when
-    sunroof_glass is already DAMAGED or when no roof metal is DAMAGED.
-    Mutates the assessment in place: replaces the sunroof_glass PartActualState
-    with a DAMAGED SEVERE one and updates the classified lists.
-    """
-    ROOF_METAL = ("roof_front", "roof_middle", "roof_rear")
-    status_by_id = {p.part_id: p.status for p in assessment.parts}
-    damaged_neighbors = [n for n in ROOF_METAL if status_by_id.get(n) == Status.DAMAGED]
-    if not damaged_neighbors:
-        return
-
-    new_parts: List[PartActualState] = []
-    promoted = False
-    for part in assessment.parts:
-        if part.part_id != "sunroof_glass":
-            new_parts.append(part)
-            continue
-
-        if part.status == Status.DAMAGED:
-            # Already correct — helper doesn't overwrite.
-            new_parts.append(part)
-            continue
-
-        inherited_types = list(part.damage_types)
-        damaged_evidence_types = {"breakage", "crack", "deformation",
-                                  "shatter", "fragment"}
-        if part.status == Status.UNCERTAIN:
-            # No direct evidence — promote based on roof_metal adjacency.
-            eligible = True
-        elif part.status == Status.MISSING:
-            # Direct observation present.  Only override to damaged if the
-            # observation already reports breakage / crack / deformation
-            # (i.e. the synthesizer picked 'missing' as terminal status but
-            # the view_agent saw damage).  Pure-missing with no damaged
-            # evidence means "no sunroof" — leave it alone.
-            eligible = any(
-                dt in damaged_evidence_types for dt in inherited_types
-            )
-        else:
-            eligible = False
-
-        if not eligible:
-            new_parts.append(part)
-            continue
-
-        if part.status == Status.UNCERTAIN:
-            note_suffix = (
-                f"车顶金属面板严重受损（{', '.join(damaged_neighbors)}），"
-                f"推断天窗玻璃同步受损"
-            )
-        else:  # MISSING
-            note_suffix = (
-                f"视图已观察到玻璃破损（{', '.join(damaged_neighbors)} 同步受损），"
-                f"将 missing 回退为 damaged severe"
-            )
-        new_notes = f"{part.notes}；{note_suffix}" if part.notes else note_suffix
-        # Preserve damage_types from view_agent observations (breakage,
-        # crack, etc.) instead of overwriting with a generic placeholder.
-        cleaned_types = [
-            dt for dt in inherited_types
-            if dt not in ("none", "missing", "")
-        ]
-        damage_types_final = cleaned_types if cleaned_types else ["deformation"]
-        new_parts.append(PartActualState(
-            part_id=part.part_id,
-            part_name=part.part_name,
-            part_category=part.part_category,
-            side=part.side,
-            status=Status.DAMAGED,
-            damage_level=DamageLevel.SEVERE,
-            damage_types=damage_types_final,
-            standard_exists=part.standard_exists,
-            actual_visible=part.actual_visible,
-            actual_present=part.actual_present,
-            confidence="medium",
-            evidence_photos=list(part.evidence_photos),
-            notes=new_notes,
-            adjacent_status=dict(part.adjacent_status),
-            photo_type=part.photo_type,
-            evidence_sources=list(part.evidence_sources),
-        ))
-        promoted = True
-        logger.info(
-            "[sunroof-propagation] promoted sunroof_glass from %s → damaged_severe "
-            "(roof_metal damaged: %s)",
-            part.status.value,
-            ", ".join(damaged_neighbors),
-        )
-
-    if not promoted:
-        return
-
-    assessment.parts = new_parts
-    assessment.damaged_parts = [
-        p.part_id for p in new_parts if p.status == Status.DAMAGED
-    ]
-    assessment.intact_parts = [
-        p.part_id for p in new_parts if p.status == Status.INTACT
-    ]
-    assessment.uncertain_parts = [
-        p.part_id for p in new_parts if p.status == Status.UNCERTAIN
-    ]
-    assessment.missing_parts = [
-        p.part_id for p in new_parts if p.status == Status.MISSING
-    ]
-    if "damaged_parts_count" in assessment.summary:
-        assessment.summary["damaged_parts_count"] = len(assessment.damaged_parts)
-    if "intact_parts_count" in assessment.summary:
-        assessment.summary["intact_parts_count"] = len(assessment.intact_parts)
-    if "uncertain_parts_count" in assessment.summary:
-        assessment.summary["uncertain_parts_count"] = len(assessment.uncertain_parts)
 
 
 def _extract_photo_classifications(plan: Dict[str, Any]) -> Dict[str, str]:
@@ -340,6 +338,17 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
         photo_id = result.get("photo_id", "unknown")
         primary_view = result.get("primary_view")
         for obs in result.get("parts", []):
+            # NOTE: ``absent`` backfill observations (status="absent" + _backfill=True)
+            # are intentionally KEPT here in the aggregator.  The synthesizer
+            # already filters them out via _is_backfilled_uncertain, and the
+            # observed=False marker on evidence_sources keeps them out of the
+            # topology cascade rules.  Dropping them here looked tempting but
+            # breaks the safety net: a single-source high-confidence damaged
+            # observation on a candidate part (e.g. fender_front_left reported
+            # by a single front view) would otherwise convict the part without
+            # any cross-photo counterweight, surfacing new FPs (172852 E2E:
+            # damaged 11 → 16 after the skip).  Leave the filtering to
+            # synthesizer + topology, where it's already correct.
             part_id = obs["part_id"]
             entry = evidence.setdefault(part_id, {
                 "part_id": part_id,
@@ -404,6 +413,21 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             # Primary view says damaged — accept unless contradicted by
             # strong-primary intact (handled above).
             entry["aggregated_status"] = "damaged"
+        elif (
+            damaged_votes >= 1
+            and primary_strong_intact_votes < 2
+            and any(
+                o["status"] == "damaged" and o.get("view_id") in primary_views
+                for o in entry["observations"]
+            )
+        ):
+            # A primary-view (priority <= 1, not necessarily strong) damaged
+            # observation convicts the part unless at least two strong-primary
+            # intact observations disagree.  A single strong-primary intact is
+            # not a consensus (§3.1), so it cannot alone override a primary
+            # damaged signal.  This is the conflict case the aggregator must
+            # still surface as damaged (with ``conflicting`` set below).
+            entry["aggregated_status"] = "damaged"
         elif damaged_votes >= 2 and primary_intact_votes == 0 and primary_observations == 0:
             # No primary observations but ≥2 damaged from secondary views —
             # trust the consensus when primary view didn't reach the part.
@@ -434,6 +458,90 @@ def _aggregate_part_evidence(view_results: List[Dict[str, Any]]) -> Dict[str, Di
             entry["conflicting"] = True
 
     return evidence
+
+
+def _part_side(part_id: str) -> str:
+    """Return the vehicle side a part belongs to: left / right / center."""
+    if part_id.endswith("_left"):
+        return "left"
+    if part_id.endswith("_right"):
+        return "right"
+    return "center"
+
+
+def _apply_facing_consensus(
+    face_priors: Dict[str, Dict[str, Any]],
+    view_results: List[Dict[str, Any]],
+) -> None:
+    """Cross-photo facing consensus via damage-location self-consistency.
+
+    A low-confidence facing may simply be *wrong* — e.g. a front-windshield
+    close-up misread as ``rear`` because shattered glass looks the same front
+    and back.  The vehicle is a rigid body, so one batch of photos should
+    agree on which side/region is damaged.  This routine:
+
+    1. Lets high-confidence photos vote the consensus damaged side(s) from
+       where THEIR damage actually landed (not from the facing label — the
+       label can be wrong, the damaged parts are the ground signal).
+    2. For each low-confidence (or unusable) photo, checks whether its OWN
+       damaged observations are self-consistent with that consensus: does the
+       side its damaged parts fall on match a consensus damaged side?
+    3. Keeps consistent observations; soft-downgrades (confidence=low) the
+       ones that contradict the consensus — those are the likely mis-faced
+       false positives.  A photo whose damage IS consistent keeps full weight,
+       which "rescues" a mis-faced photo's real damage instead of dropping it.
+
+    This never touches high-confidence photos and never rewrites a part id —
+    it only downgrades confidence on contradictory observations, so the
+    downstream consensus rules (which already require high confidence or
+    corroboration) stop a mis-faced close-up from convicting a part alone.
+    """
+    damaged_by_photo: Dict[str, List[Dict[str, Any]]] = {}
+    for r in view_results:
+        pid = r.get("photo_id")
+        if not pid:
+            continue
+        damaged_by_photo[pid] = [
+            p for p in r.get("parts", []) if p.get("status") in ("damaged", "missing")
+        ]
+
+    # 1. Consensus damaged sides, voted by USABLE (high/medium-confidence,
+    #    clearly-faced) photos from the sides their damage actually fell on.
+    side_votes: Dict[str, int] = {}
+    for pid, fp in face_priors.items():
+        if not fp.get("usable"):
+            continue
+        for obs in damaged_by_photo.get(pid, []):
+            side = _part_side(obs.get("part_id", ""))
+            if side in ("left", "right"):
+                side_votes[side] = side_votes.get(side, 0) + 1
+    if not side_votes:
+        return  # no reliable damaged-side signal; nothing to check against
+    consensus_sides = {s for s, n in side_votes.items() if n == max(side_votes.values())}
+
+    # 2+3. For low-confidence / unusable photos, downgrade damage that
+    #      contradicts the consensus damaged side.
+    downgraded = 0
+    for pid, fp in face_priors.items():
+        if fp.get("usable"):
+            continue  # trusted photo — leave its observations alone
+        for obs in damaged_by_photo.get(pid, []):
+            side = _part_side(obs.get("part_id", ""))
+            if side == "center":
+                continue  # center parts (hood/roof/windshield) carry no side signal
+            if side not in consensus_sides:
+                obs["confidence"] = "low"
+                obs["model_confidence_score"] = min(
+                    float(obs.get("model_confidence_score", 0.5)), 0.4
+                )
+                obs["_consensus_downgraded"] = True
+                downgraded += 1
+    if downgraded:
+        logger.info(
+            "[master] facing consensus sides=%s downgraded %d contradictory "
+            "low-confidence observation(s)",
+            sorted(consensus_sides), downgraded,
+        )
 
 
 def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
@@ -517,6 +625,171 @@ def _check_side_consistency(evidence: Dict[str, Dict[str, Any]]) -> int:
             )
 
     return violations
+
+
+def _resolve_left_right_conflicts(
+    part_evidence: Dict[str, Dict[str, Any]],
+    face_priors: Dict[str, Dict[str, Any]],
+) -> None:
+    """Resolve left/right damage conflicts using cross-photo consensus.
+
+    Mutates part_evidence in place.  See master_assessment_agent step 5b for
+    the three-layer defense design.
+    """
+    # ---- Layer 1: bilateral damage detection --------------------------------
+    # Count part pairs where BOTH sides have at least one damaged observation.
+    # A "part pair" is (X_left, X_right) for the same base part X.
+    bilateral_pairs = 0
+    pairs_seen: set[str] = set()
+    for part_id, entry in part_evidence.items():
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        base = part_id.rsplit("_", 1)[0]
+        if base in pairs_seen:
+            continue
+        left_id = f"{base}_left"
+        right_id = f"{base}_right"
+        left_entry = part_evidence.get(left_id)
+        right_entry = part_evidence.get(right_id)
+        if not left_entry or not right_entry:
+            continue
+        left_damaged = any(
+            o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+            for o in left_entry.get("observations", [])
+        )
+        right_damaged = any(
+            o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+            for o in right_entry.get("observations", [])
+        )
+        if left_damaged and right_damaged:
+            bilateral_pairs += 1
+            pairs_seen.add(base)
+
+    if bilateral_pairs >= 2:
+        logger.info(
+            "[master.lr] bilateral damage detected (%d pairs) — respecting raw "
+            "observations, skipping mutual exclusion",
+            bilateral_pairs,
+        )
+        return  # skip Layer 2 and 3
+
+    # ---- Layer 3 (compute first, needed for Layer 2 penalty) ----------------
+    # Cross-photo camera_side consensus: majority side among usable photos.
+    side_votes = {"left": 0, "right": 0}
+    for fp in face_priors.values():
+        if not fp.get("usable"):
+            continue
+        side = fp.get("camera_side")
+        if side in ("left", "right"):
+            side_votes[side] += 1
+    consensus_side: Optional[str] = None
+    if side_votes["left"] > side_votes["right"]:
+        consensus_side = "left"
+    elif side_votes["right"] > side_votes["left"]:
+        consensus_side = "right"
+
+    # Photos whose camera_side contradicts the consensus — their left/right
+    # observations are suspect (face_profiler may have flipped the side).
+    suspect_photos: set[str] = set()
+    if consensus_side:
+        for pid, fp in face_priors.items():
+            if not fp.get("usable"):
+                continue
+            side = fp.get("camera_side")
+            if side and side != consensus_side:
+                suspect_photos.add(pid)
+
+    # ---- Layer 2: unilateral mutual exclusion -------------------------------
+    # For each part pair where only ONE side is damaged, keep the higher-
+    # confidence observation and downgrade the other side's observations to
+    # uncertain.  Additionally, observations from suspect photos (Layer 3)
+    # only survive if they report severe/moderate damage — light damage from
+    # a side-flipped photo is almost certainly a hallucination.
+    pairs_processed: set[str] = set()
+    downgraded_count = 0
+    for part_id in list(part_evidence.keys()):
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        base = part_id.rsplit("_", 1)[0]
+        if base in pairs_processed:
+            continue
+        pairs_processed.add(base)
+
+        left_id = f"{base}_left"
+        right_id = f"{base}_right"
+        left_entry = part_evidence.get(left_id)
+        right_entry = part_evidence.get(right_id)
+        if not left_entry or not right_entry:
+            continue
+
+        left_damaged_obs = [
+            o for o in left_entry.get("observations", [])
+            if o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+        ]
+        right_damaged_obs = [
+            o for o in right_entry.get("observations", [])
+            if o.get("status") == "damaged" and o.get("confidence") in ("high", "medium")
+        ]
+
+        # Only one side damaged (with confidence) → mutual exclusion.
+        # Low-confidence damaged observations are treated as noise — they may
+        # be view_agent hallucinations on dual-side candidates and do not
+        # block the exclusion of the opposite side.
+        if left_damaged_obs and not right_damaged_obs:
+            _downgrade_side_observations(
+                right_entry, suspect_photos, reason=f"{right_id} excluded (only {left_id} damaged)"
+            )
+            downgraded_count += len(right_entry.get("observations", []))
+        elif right_damaged_obs and not left_damaged_obs:
+            _downgrade_side_observations(
+                left_entry, suspect_photos, reason=f"{left_id} excluded (only {right_id} damaged)"
+            )
+            downgraded_count += len(left_entry.get("observations", []))
+        # Both sides damaged or neither → no mutual exclusion (handled by Layer 1)
+
+    # Layer 3 penalty (independent of Layer 2 pair check): suspect photos'
+    # light-damage observations → uncertain.  Applies to ALL left/right parts,
+    # not just paired ones — a suspect photo's light damage report is almost
+    # certainly a side-flip hallucination regardless of whether the opposite
+    # side exists in the evidence.
+    for part_id, entry in part_evidence.items():
+        if not (part_id.endswith("_left") or part_id.endswith("_right")):
+            continue
+        for obs in entry.get("observations", []):
+            if obs.get("photo_id") not in suspect_photos:
+                continue
+            if obs.get("status") != "damaged":
+                continue
+            level = obs.get("damage_level", "unknown")
+            if level == "light":
+                obs["status"] = "uncertain"
+                obs["confidence"] = "low"
+                obs["_consensus_penalty"] = True
+                downgraded_count += 1
+
+    if downgraded_count:
+        logger.info(
+            "[master.lr] downgraded %d observation(s) via left/right conflict "
+            "resolution (consensus_side=%s, suspect_photos=%d)",
+            downgraded_count, consensus_side, len(suspect_photos),
+        )
+
+
+def _downgrade_side_observations(
+    entry: Dict[str, Any],
+    suspect_photos: set[str],
+    *,
+    reason: str,
+) -> None:
+    """Downgrade all observations in a part entry to uncertain/low."""
+    for obs in entry.get("observations", []):
+        if obs.get("status") == "damaged":
+            obs["status"] = "uncertain"
+            obs["confidence"] = "low"
+            obs["_lr_excluded"] = reason
+        # Also downgrade suspect-photo observations regardless of status
+        if obs.get("photo_id") in suspect_photos:
+            obs["confidence"] = "low"
 
 
 _PRIMARY_VIEW_CACHE: Dict[str, set] = {}
@@ -625,6 +898,13 @@ def _build_region_results(
                 "confidence": obs.get("confidence", "low"),
                 "evidence_photo": obs.get("evidence_photo", result.get("photo_id")),
                 "notes": obs.get("description", ""),
+                # Carry the model's self-reported confidence score so the
+                # synthesizer can distinguish a checklist backfill (score 0.0 —
+                # the model never observed the part) from a real observation.
+                # Without this the backfill signal was dropped at this boundary
+                # and topology Rules 9-11 could not tell a backfill from a real
+                # observation (172852 pillar_b_right systematic FP).
+                "model_confidence_score": obs.get("model_confidence_score", 1.0),
                 "_region": primary_view,
                 "_aggregated_status": evidence.get("aggregated_status"),
                 "_aggregated_confidence": evidence.get("aggregated_confidence"),

@@ -169,7 +169,11 @@ class TestSynthesizerLogsConflict:
                         "status": "damaged",
                         "damage_level": "severe",
                         "damage_type": ["missing"],
-                        "confidence": "low",
+                        # high confidence: a credible severe neighbour.  Rule 8
+                        # only propagates from credible (non-low-confidence)
+                        # severe neighbours after the 172852 FP fix, so the
+                        # fixture must use high to exercise the rule.
+                        "confidence": "high",
                         "evidence_photo": ["photo_01"],
                         "notes": "损毁",
                     },
