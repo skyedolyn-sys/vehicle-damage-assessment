@@ -635,16 +635,17 @@
             </div>
             <div class="form-group" style="margin-top: 12px;">
                 <label>API Key</label>
-                <div style="display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: end;">
+                <div style="display: grid; grid-template-columns: 1fr auto auto auto; gap: 12px; align-items: end;">
                     <input type="password" id="apiKey" placeholder="留空使用服务端环境变量" autocomplete="off">
                     <div class="api-key-status" id="apiKeyStatus">未设置，使用服务端默认</div>
                     <button type="button" class="btn btn-text" id="saveApiKeyBtn">保存到本地</button>
+                    <button type="button" class="btn btn-text" id="clearApiKeyBtn">清除覆盖</button>
                 </div>
             </div>
             <div class="api-key-hint">
                 全部留空 → 使用服务端 <code>MINIMAX_API_KEY</code> / <code>MINIMAX_BASE_URL</code> / <code>MINIMAX_MODEL</code>；
                 填入 → 临时覆盖（仅保存在浏览器 <code>localStorage</code>，不会写回服务端 .env）。
-                三种协议：MiniMax 与 OpenAI 都是 <code>/chat/completions</code> + Bearer；Anthropic 用 <code>/messages</code> + <code>x-api-key</code>。
+                三种协议：MiniMax 与 OpenAI 都是 <code>/v1/chat/completions</code> + Bearer；Anthropic 用 <code>/anthropic/v1/messages</code> + <code>x-api-key</code>。Base URL 可以只填到 host 根（如 <code>https://api.minimaxi.com/v1</code> 或 <code>https://api.minimaxi.com/anthropic</code>），后端会自动补全路径。
             </div>
         </div>
 
@@ -752,17 +753,58 @@
         const apiKeyInput = document.getElementById('apiKey');
         const apiKeyStatus = document.getElementById('apiKeyStatus');
         const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+        const clearApiKeyBtn = document.getElementById('clearApiKeyBtn');
         const llmProviderInput = document.getElementById('llmProvider');
         const baseUrlInput = document.getElementById('baseUrl');
         const llmModelInput = document.getElementById('llmModel');
 
         const _LLM_STORE_KEY = 'vda_llm_overrides_v2';
 
+        // Client-side mirror of the backend guard: detect when the Base URL
+        // belongs to a different wire protocol than the selected Provider.
+        // The classic failure is provider=minimax + a cached ".../anthropic"
+        // URL → the server 404s.  We warn and refuse to save that combo.
+        function _urlMatchesProvider(provider, baseUrl) {
+            if (!provider || !baseUrl) return true;
+            const url = baseUrl.trim().toLowerCase().replace(/\/+$/, '');
+            const looksAnthropic = url.endsWith('/messages') || url.endsWith('/v1/messages') || url.includes('/anthropic');
+            const chatProviders = ['minimax', 'openai'];
+            if (chatProviders.includes(provider) && looksAnthropic) return false;
+            if (provider === 'anthropic' && url.endsWith('/chat/completions')) return false;
+            return true;
+        }
+
         function _readStoredOverrides() {
             try {
                 const raw = localStorage.getItem(_LLM_STORE_KEY);
                 return raw ? JSON.parse(raw) : {};
             } catch { return {}; }
+        }
+
+        // Heuristic check: an API key pasted from documentation prose looks
+        // like a paragraph, not a token.  Common signatures of "user pasted
+        // the docs, not the key" are CJK characters, newlines, sentence-like
+        // spaces, and length < 16.  This is intentionally permissive — we
+        // only reject the obvious failure modes, not unusual-but-valid keys.
+        function _looksLikeApiKey(value) {
+            if (!value) return true;  // empty is allowed (server default)
+            if (/[　-鿿＀-￯]/.test(value)) return false;
+            if (/\r|\n/.test(value)) return false;
+            if (/\s{2,}/.test(value)) return false;        // sentence-like spacing
+            if (/[一-鿿]/.test(value)) return false;
+            const trimmed = value.trim();
+            if (trimmed.length < 16) return false;
+            return true;
+        }
+        function _fingerprintKey(value) {
+            // Show first 4 + last 4 chars + length so the user can spot a
+            // mistakenly-pasted paragraph (which would be "0 chars / 800 chars"
+            // here, with a clear prefix like "生成" rather than "sk-cp-").
+            const t = (value || '').trim();
+            if (!t) return '未设置';
+            const head = t.slice(0, 4);
+            const tail = t.slice(-4);
+            return `key「${head}…${tail}」(len ${t.length})`;
         }
         function _writeStoredOverrides(obj) {
             try {
@@ -783,10 +825,9 @@
             if (llmProviderInput.value) parts.push(`provider=${llmProviderInput.value}`);
             if (baseUrlInput.value) parts.push(`base_url=…${baseUrlInput.value.slice(-12)}`);
             if (llmModelInput.value) parts.push(`model=${llmModelInput.value}`);
-            const v = (apiKeyInput.value || '').trim();
-            if (v) parts.push(`key (len ${v.length})`);
+            parts.push(_fingerprintKey(apiKeyInput.value));
 
-            if (parts.length === 0) {
+            if (!llmProviderInput.value && !baseUrlInput.value && !llmModelInput.value && !(apiKeyInput.value || '').trim()) {
                 apiKeyStatus.textContent = '未设置，使用服务端默认';
                 apiKeyStatus.classList.add('missing');
                 apiKeyStatus.classList.remove('set');
@@ -803,11 +844,39 @@
         llmModelInput.value = _stored.model || '';
         apiKeyInput.value = _stored.apiKey || '';
         refreshApiKeyStatus();
+        // If a previously-saved combo is protocol-mismatched or the saved key
+        // doesn't look like an API key (e.g. user pasted the docs), surface it
+        // on load so they fix it instead of re-running into a 401/404.
+        const _savedKey = (apiKeyInput.value || '').trim();
+        if (!_urlMatchesProvider(llmProviderInput.value.trim(), baseUrlInput.value.trim())) {
+            apiKeyStatus.textContent = '⚠ 本地保存的 Base URL 与 Provider 协议不匹配，请点「清除覆盖」或修正后保存';
+            apiKeyStatus.classList.add('missing');
+            apiKeyStatus.classList.remove('set');
+        } else if (_savedKey && !_looksLikeApiKey(_savedKey)) {
+            apiKeyStatus.textContent = `⚠ 本地保存的不是 API Key（${_fingerprintKey(_savedKey)}）。请点「清除覆盖」并只粘贴 key 本身。`;
+            apiKeyStatus.classList.add('missing');
+            apiKeyStatus.classList.remove('set');
+        }
 
         for (const el of [llmProviderInput, baseUrlInput, llmModelInput, apiKeyInput]) {
             el.addEventListener('input', refreshApiKeyStatus);
         }
         saveApiKeyBtn.addEventListener('click', () => {
+            const provider = llmProviderInput.value.trim();
+            const baseUrl = baseUrlInput.value.trim();
+            const keyVal = apiKeyInput.value.trim();
+            if (!_urlMatchesProvider(provider, baseUrl)) {
+                apiKeyStatus.textContent = '⚠ Base URL 与 Provider 协议不匹配（例如 MiniMax/OpenAI 用了 /anthropic 路径），已拒绝保存';
+                apiKeyStatus.classList.add('missing');
+                apiKeyStatus.classList.remove('set');
+                return;
+            }
+            if (!_looksLikeApiKey(keyVal)) {
+                apiKeyStatus.textContent = `⚠ 看起来不是 API Key（已粘贴内容：${_fingerprintKey(keyVal)}）。请只粘贴 key 本身（通常以 sk- 开头，无中文、无换行）。已拒绝保存。`;
+                apiKeyStatus.classList.add('missing');
+                apiKeyStatus.classList.remove('set');
+                return;
+            }
             _writeStoredOverrides({
                 provider: llmProviderInput.value,
                 baseUrl: baseUrlInput.value,
@@ -817,6 +886,16 @@
             refreshApiKeyStatus();
             saveApiKeyBtn.textContent = '✓ 已保存';
             setTimeout(() => { saveApiKeyBtn.textContent = '保存到本地'; }, 1500);
+        });
+        clearApiKeyBtn.addEventListener('click', () => {
+            llmProviderInput.value = '';
+            baseUrlInput.value = '';
+            llmModelInput.value = '';
+            apiKeyInput.value = '';
+            try { localStorage.removeItem(_LLM_STORE_KEY); } catch {}
+            refreshApiKeyStatus();
+            clearApiKeyBtn.textContent = '✓ 已清除';
+            setTimeout(() => { clearApiKeyBtn.textContent = '清除覆盖'; }, 1500);
         });
 
         function acceptFiles(fileArr) {
