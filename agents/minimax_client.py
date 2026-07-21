@@ -138,7 +138,20 @@ async def call_minimax(
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    raise RuntimeError(f"MiniMax API error {resp.status}: {text}")
+                    # Surface provider + URL + auth scheme in the error
+                    # so a UI-level misconfiguration (e.g. MiniMax key
+                    # sent to /anthropic endpoint) is obvious in the
+                    # user-facing message instead of a raw 401.
+                    auth_scheme = (
+                        "x-api-key (anthropic)"
+                        if provider in (PROVIDER_ANTHROPIC,)
+                        else f"Bearer (provider={provider})"
+                    )
+                    raise RuntimeError(
+                        f"LLM error {resp.status} from {provider} at "
+                        f"{config.MINIMAX_BASE_URL} "
+                        f"(auth={auth_scheme}, model={request_model}): {text}"
+                    )
                 data = await resp.json()
                 choice = data["choices"][0]
                 content = choice["message"]["content"]

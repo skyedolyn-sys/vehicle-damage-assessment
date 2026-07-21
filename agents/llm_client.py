@@ -86,10 +86,31 @@ class LLMConfig:
             )
             resolved_provider = PROVIDER_MINIMAX
 
+        resolved_base_url = (base_url or "").strip() or _default_base_url(resolved_provider, _config)
+        # Sanity check: flag common UI mistakes where the user pasted a
+        # MiniMax sub-path under an Anthropic provider (or vice versa).
+        # We log a warning but still proceed, because some providers use
+        # non-standard routing and we don't want to over-restrict.
+        url_lower = resolved_base_url.lower()
+        if resolved_provider == PROVIDER_ANTHROPIC and "anthropic" not in url_lower:
+            logger.warning(
+                "[llm] provider=anthropic but base_url=%s does not mention "
+                "'anthropic'.  Anthropic-compatible endpoints typically live at "
+                "https://api.anthropic.com/v1/messages.",
+                resolved_base_url,
+            )
+        if resolved_provider == PROVIDER_MINIMAX and "/anthropic" in url_lower:
+            logger.warning(
+                "[llm] provider=minimax but base_url=%s has '/anthropic' in it. "
+                "MiniMax-compatible endpoints live at "
+                "https://api.minimaxi.com/v1/chat/completions.",
+                resolved_base_url,
+            )
+
         return cls(
             provider=resolved_provider,
             api_key=(api_key or "").strip() or _config.MINIMAX_API_KEY,
-            base_url=(base_url or "").strip() or _default_base_url(resolved_provider, _config),
+            base_url=resolved_base_url,
             model=(model or "").strip() or _default_model(resolved_provider, _config),
         )
 
@@ -198,7 +219,12 @@ async def _call_openai_compatible(
             async with session.post(
                 cfg.base_url, json=payload, headers=headers
             ) as resp:
-                resp.raise_for_status()
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(
+                        f"LLM error {resp.status} from openai_compatible at "
+                        f"{cfg.base_url} (auth=Bearer, model={cfg.model}): {text}"
+                    )
                 data = await resp.json()
     return _extract_openai_text(data)
 
@@ -264,7 +290,12 @@ async def _call_anthropic(
             async with session.post(
                 cfg.base_url, json=payload, headers=headers
             ) as resp:
-                resp.raise_for_status()
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise RuntimeError(
+                        f"LLM error {resp.status} from anthropic at "
+                        f"{cfg.base_url} (auth=x-api-key, model={cfg.model}): {text}"
+                    )
                 data = await resp.json()
     return _extract_anthropic_text(data)
 
