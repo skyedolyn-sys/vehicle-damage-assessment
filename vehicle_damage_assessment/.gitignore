@@ -32,6 +32,15 @@ run_*.py
 db.sqlite3
 *.sqlite3
 
+# Local secrets — the receiving environment must fill this in.  A template
+# is checked in at .env.example with placeholder values only.
+.env
+.env.local
+
+# Runtime cache written by data/vehicle_specs_cache.py — see the .example
+# next to it for the seed-load step that recreates it on first run.
+data/vehicle_specs_cache.json
+
 # Backup files (e.g. vehicle_specs_cache.json.bak.YYYYMMDD_HHMMSS)
 *.bak
 *.bak.*
